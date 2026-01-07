@@ -76,8 +76,6 @@ def video_frame_callback(frame):
     global last_process_time
     img = frame.to_ndarray(format="bgr24")
     img = cv2.flip(img, 1)
-
-    results = hands.process(img_rgb)
     
     current_time = time.time()
     # ประมวลผล AI ทุกๆ 0.1 วินาทีเท่านั้น (ประมาณ 10 fps) เพื่อไม่ให้มือถือค้าง
@@ -157,4 +155,5 @@ while True:
         )
     except queue.Empty:
         pass
+
 
