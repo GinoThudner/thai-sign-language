@@ -13,7 +13,7 @@ st.title("🖐️ เครื่องแปลภาษามือไทย R
 st.write("สถานะ: กำลังโหลดระบบ... กรุณารอสักครู่")
 
 # --- 2. จัดการ Path และโหลดทรัพยากร (Model & Labels) ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 model_path = os.path.join(BASE_DIR, 'keypoint_classifier_model.pkl')
 label_path = os.path.join(BASE_DIR, 'keypoint_classifier_label.csv')
 
@@ -114,3 +114,4 @@ webrtc_streamer(
     media_stream_constraints={"video": True, "audio": False},
     async_processing=True,
 )
+
