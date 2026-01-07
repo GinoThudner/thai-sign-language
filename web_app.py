@@ -81,53 +81,38 @@ def video_frame_callback(frame):
         sorted_hands = sorted(zip(results.multi_hand_landmarks, results.multi_handedness),
                               key=lambda x: x[0].landmark[0].x)
         
-        if len(sorted_hands) == 1:
-            hl, hn = sorted_hands[0]
-            pts = [[int(l.x * w), int(l.y * h)] for l in hl.landmark]
-            processed = pre_process_landmark(pts)
-            if hn.classification[0].label == 'Right':
-                processed = flip_keypoint_x(processed)
-            data_aux.extend(processed)
-            data_aux.extend([0.0] * 42)
-        elif len(sorted_hands) >= 2:
-            for i in range(2):
-                hl = sorted_hands[i][0]
-                pts = [[int(l.x * w), int(l.y * h)] for l in hl.landmark]
-                data_aux.extend(pre_process_landmark(pts))
+        # ... (ส่วนเตรียมข้อมูล 84 features เหมือนเดิมที่คุณมี) ...
+        # สมมติว่าได้ prediction และ conf มาแล้ว
         
-        if len(data_aux) == 84:
-            prediction = model.predict(np.array([data_aux]))[0]
-            conf = model.predict_proba(np.array([data_aux])).max()
+        if conf > 0.7:
+            res_thai = labels[int(prediction)]
+            result_queue.put(f"{res_thai} ({conf:.2f})") # ส่งไปที่แถบเขียวด้านบน (ใช้ได้แน่นอน)
+
+            # --- ส่วนวาดลงบนวิดีโอ (กลางล่าง) ---
+            try:
+                # พยายามใช้ Pillow วาดภาษาไทย
+                img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                draw = ImageDraw.Draw(img_pil)
+                
+                # คำนวณตำแหน่งกึ่งกลางด้านล่าง
+                bbox = draw.textbbox((0, 0), res_thai, font=thai_font)
+                text_w = bbox[2] - bbox[0]
+                text_x = (w - text_w) // 2
+                text_y = h - 100 
+
+                # วาดพื้นหลังดำเพื่อให้ข้อความเด่น
+                draw.rectangle([text_x - 20, text_y - 10, text_x + text_w + 20, text_y + 60], fill=(0, 0, 0, 180))
+                draw.text((text_x, text_y), res_thai, font=thai_font, fill=(0, 255, 0))
+                
+                img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
             
-            if conf > 0.7:
-                res_thai = labels[int(prediction)]
-                # ส่งเข้า Queue ไปแสดงที่แถบสีเขียวบนหน้าเว็บ
-                result_queue.put(f"{res_thai} ({conf:.2f})")
-
-                # --- ส่วนแก้ไข: วาดภาษาไทยด้วย Pillow ไว้กึ่งกลางด้านล่าง ---
-                try:
-                    # แปลง OpenCV (BGR) เป็น PIL (RGB)
-                    img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-                    draw = ImageDraw.Draw(img_pil)
-                    
-                    # คำนวณตำแหน่งกึ่งกลางด้านล่าง
-                    bbox = draw.textbbox((0, 0), res_thai, font=thai_font)
-                    text_w = bbox[2] - bbox[0]
-                    text_x = (w - text_w) // 2
-                    text_y = h - 80  # ระยะห่างจากขอบล่าง 80 พิกเซล
-
-                    # วาดกล่องพื้นหลังสีดำโปร่งแสงเพื่อให้ข้อความเด่นชัด
-                    draw.rectangle([text_x - 15, text_y - 5, text_x + text_w + 15, text_y + 55], fill=(0, 0, 0, 160))
-                    
-                    # วาดตัวอักษรไทยสีเขียว
-                    draw.text((text_x, text_y), res_thai, font=thai_font, fill=(0, 255, 0))
-                    
-                    # แปลงกลับเป็น OpenCV (BGR)
-                    img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
-                except Exception as e:
-                    # กรณีฟอนต์มีปัญหา ให้โชว์คำแปลภาษาอังกฤษที่กลางล่างแทนเพื่อความปลอดภัย
-                    cv2.putText(img, f"Result: {prediction}", (w//2 - 100, h - 50), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            except:
+                # ถ้า Pillow พัง (หาฟอนต์ไทยไม่เจอ) ให้วาด ID เป็นภาษาอังกฤษที่กลางล่างแทน
+                # เพื่อป้องกันไม่ให้ขึ้น ????? หรือกล่องดำ
+                label_en = f"Gesture ID: {prediction}"
+                cv2.rectangle(img, (w//2 - 120, h - 110), (w//2 + 120, h - 40), (0, 0, 0), -1)
+                cv2.putText(img, label_en, (w//2 - 100, h - 60), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
     return frame.from_ndarray(img, format="bgr24")
 
@@ -153,5 +138,6 @@ while True:
         output_text.success(f"✅ ท่าทางที่พบ: {msg}")
     except queue.Empty:
         pass
+
 
 
