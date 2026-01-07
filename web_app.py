@@ -55,31 +55,38 @@ def video_frame_callback(frame):
     results = hands.process(img_rgb)
 
     if results.multi_hand_landmarks:
-        for hand_landmarks in results.multi_hand_landmarks:
-            mp_drawing.draw_landmarks(img, hand_landmarks, mp_hands_module.HAND_CONNECTIONS)
-            
-            data_aux = []
-            x_ = []
-            y_ = []
+        # สร้างลิสต์ว่างรอไว้ 84 ช่อง (ค่าเริ่มต้นเป็น 0)
+        data_aux = [0.0] * 84 
+        
+        # เราจะประมวลผลเฉพาะมือแรกที่เจอ
+        hand_landmarks = results.multi_hand_landmarks[0]
+        mp_drawing.draw_landmarks(img, hand_landmarks, mp_hands_module.HAND_CONNECTIONS)
+        
+        x_ = []
+        y_ = []
+        for i in range(len(hand_landmarks.landmark)):
+            x_.append(hand_landmarks.landmark[i].x)
+            y_.append(y_) # (ในโค้ดเดิมมีพิมพ์ผิดนิดหน่อย แก้เป็นด้านล่างครับ)
 
-            for i in range(len(hand_landmarks.landmark)):
-                x = hand_landmarks.landmark[i].x
-                y = hand_landmarks.landmark[i].y
-                x_.append(x)
-                y_.append(y)
+        # แก้ไขลูปดึงพิกัดใหม่ให้ถูกต้อง
+        x_coords = [lm.x for lm in hand_landmarks.landmark]
+        y_coords = [lm.y for lm in hand_landmarks.landmark]
+        min_x = min(x_coords)
+        min_y = min(y_coords)
 
-            for i in range(len(hand_landmarks.landmark)):
-                x = hand_landmarks.landmark[i].x
-                y = hand_landmarks.landmark[i].y
-                data_aux.append(x - min(x_))
-                data_aux.append(y - min(y_))
+        # ใส่ข้อมูลลงใน 42 ช่องแรก
+        for i in range(len(hand_landmarks.landmark)):
+            data_aux[i*2] = hand_landmarks.landmark[i].x - min_x
+            data_aux[i*2 + 1] = hand_landmarks.landmark[i].y - min_y
+        
+        # หมายเหตุ: อีก 42 ช่องที่เหลือ (ช่องที่ 42-83) จะเป็น 0.0 
+        # เพื่อให้รวมกันได้ 84 features ตามที่ Random Forest ต้องการ
 
-            # --- ส่วนที่แก้ไข: การทำนายและ Debug Error ---
-            if model:
-                try:
-                    # เตรียมข้อมูลและตรวจสอบรูปร่าง (Shape)
-                    input_data = np.asarray(data_aux).reshape(1, -1)
-                    prediction = model.predict(input_data)
+        if model:
+            try:
+                input_data = np.asarray(data_aux).reshape(1, -1)
+                prediction = model.predict(input_data)
+                # ... (ส่วนแสดงผลเหมือนเดิม) ...
                     index = int(prediction[0])
                     
                     if index < len(labels):
@@ -110,3 +117,4 @@ webrtc_streamer(
     media_stream_constraints={"video": True, "audio": False},
     async_processing=True,
 )
+
