@@ -19,17 +19,13 @@ label_path = os.path.join(BASE_DIR, 'keypoint_classifier_label.csv')
 
 @st.cache_resource
 def load_all_resources():
-    # โหลดโมเดล
     try:
         with open(model_path, 'rb') as f:
             m_data = pickle.load(f)
-            # รองรับทั้งแบบ dict และแบบเก็บ model ตรงๆ
             model_obj = m_data['model'] if isinstance(m_data, dict) else m_data
         
-        # โหลดเลเบล
         labels_list = pd.read_csv(label_path, header=None).iloc[:, 0].tolist()
         
-        # ตั้งค่า MediaPipe
         mp_hands = mp.solutions.hands
         mp_draw = mp.solutions.drawing_utils
         hands_engine = mp_hands.Hands(
@@ -46,73 +42,71 @@ def load_all_resources():
 model, labels, hands, mp_drawing, mp_hands_module = load_all_resources()
 
 if model:
-    st.success("✅ ระบบพร้อมใช้งาน! กรุณากดปุ่ม Start ด้านล่าง")
+    st.success(f"✅ ระบบพร้อมใช้งาน! (โหลด {len(labels)} ท่าทาง)")
 else:
-    st.error("❌ ไม่สามารถโหลดโมเดลได้ กรุณาตรวจสอบไฟล์บน GitHub")
+    st.error("❌ ไม่สามารถโหลดโมเดลได้")
 
-# --- 3. ฟังก์ชันประมวลผลวิดีโอ (Core Logic) ---
+# --- 3. ฟังก์ชันประมวลผลวิดีโอ ---
 def video_frame_callback(frame):
     img = frame.to_ndarray(format="bgr24")
-    img = cv2.flip(img, 1) # กลับด้านหน้าจอให้เหมือนกระจก
+    img = cv2.flip(img, 1) 
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     
     results = hands.process(img_rgb)
 
     if results.multi_hand_landmarks:
         for hand_landmarks in results.multi_hand_landmarks:
-            # วาดจุดเชื่อมมือ (ช่วยเช็คว่า MediaPipe ทำงานไหม)
             mp_drawing.draw_landmarks(img, hand_landmarks, mp_hands_module.HAND_CONNECTIONS)
             
             data_aux = []
             x_ = []
             y_ = []
 
-            # ดึงพิกัดจุด 21 จุด
             for i in range(len(hand_landmarks.landmark)):
                 x = hand_landmarks.landmark[i].x
                 y = hand_landmarks.landmark[i].y
                 x_.append(x)
                 y_.append(y)
 
-            # ปรับพิกัดให้เป็นค่าสัมพัทธ์ (Relative coordinates)
             for i in range(len(hand_landmarks.landmark)):
                 x = hand_landmarks.landmark[i].x
                 y = hand_landmarks.landmark[i].y
                 data_aux.append(x - min(x_))
                 data_aux.append(y - min(y_))
 
-            # ทำนายผล
+            # --- ส่วนที่แก้ไข: การทำนายและ Debug Error ---
             if model:
                 try:
-                    prediction = model.predict([np.asarray(data_aux)])
+                    # เตรียมข้อมูลและตรวจสอบรูปร่าง (Shape)
+                    input_data = np.asarray(data_aux).reshape(1, -1)
+                    prediction = model.predict(input_data)
                     index = int(prediction[0])
-                    result_text = str(labels[index])
                     
-                    # --- ส่วนแสดงผลบนหน้าจอ ---
-                    # วาดกล่องพื้นหลังสีดำเพื่อให้เห็นตัวหนังสือชัด
-                    cv2.rectangle(img, (0, 0), (400, 80), (0, 0, 0), -1) 
-                    # เขียนคำแปลสีเขียว
+                    if index < len(labels):
+                        result_text = str(labels[index])
+                    else:
+                        result_text = f"Class {index} (No Label)"
+                    
+                    # วาดผลลัพธ์
+                    cv2.rectangle(img, (0, 0), (450, 80), (0, 0, 0), -1) 
                     cv2.putText(img, f"Result: {result_text}", (20, 55), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3, cv2.LINE_AA)
-                except Exception:
-                    # ถ้าโมเดลพังจะแสดง Error เล็กๆ ไว้มุมจอ
-                    cv2.putText(img, "Prediction Error", (10, 30), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                
+                except Exception as e:
+                    # แสดงสาเหตุของ Error บนหน้าจอ
+                    error_msg = str(e)
+                    cv2.rectangle(img, (0, 0), (640, 40), (0, 0, 255), -1)
+                    cv2.putText(img, f"Error: {error_msg[:50]}", (10, 25), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
     return frame.from_ndarray(img, format="bgr24")
 
-# --- 4. ปุ่มเปิดกล้อง WebRTC ---
-RTC_CONFIGURATION = RTCConfiguration(
-    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
-)
-
+# --- 4. ปุ่มเปิดกล้อง ---
 webrtc_streamer(
     key="thai-sign-language",
     mode=WebRtcMode.SENDRECV,
-    rtc_configuration=RTC_CONFIGURATION,
+    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
     video_frame_callback=video_frame_callback,
     media_stream_constraints={"video": True, "audio": False},
     async_processing=True,
 )
-
-st.info("💡 ทิป: หากคำแปลไม่ขึ้น ให้ลองขยับมือให้ห่างจากกล้องพอประมาณและอยู่ในที่ที่มีแสงสว่างเพียงพอ")
