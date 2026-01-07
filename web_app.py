@@ -1,6 +1,6 @@
 import streamlit as st
 
-# 1. ตั้งค่าหน้าเว็บ (ต้องเป็นบรรทัดแรกเสมอ)
+# 1. ตั้งค่าหน้าเว็บ
 st.set_page_config(page_title="Thai Sign Language", layout="centered")
 
 import cv2
@@ -11,7 +11,7 @@ import os
 import pandas as pd
 import copy
 import itertools
-import queue  # สำคัญ: ใช้สำหรับส่งข้อมูลจากกล้องมาที่หน้าจอ
+import queue
 from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
 # --- 2. โหลดทรัพยากร ---
@@ -19,7 +19,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 model_path = os.path.join(BASE_DIR, 'keypoint_classifier_model.pkl')
 label_path = os.path.join(BASE_DIR, 'keypoint_classifier_label.csv')
 
-# สร้าง Queue เพื่อรับคำแปลจากวิดีโอ
 result_queue = queue.Queue()
 
 @st.cache_resource
@@ -32,7 +31,7 @@ def load_resources():
         df = pd.read_csv(label_path, header=None, encoding='utf-8')
         labels_list = df.iloc[:, 1].astype(str).tolist() if df.shape[1] > 1 else df.iloc[:, 0].astype(str).tolist()
     else:
-        labels_list = ["No Labels Found"]
+        labels_list = ["ไม่พบข้อมูลคำแปล"]
     
     mp_hands = mp.solutions.hands
     hands_engine = mp_hands.Hands(
@@ -65,12 +64,11 @@ def video_frame_callback(frame):
 
     if results.multi_hand_landmarks:
         for hl in results.multi_hand_landmarks:
+            # วาดแค่เส้น Skeleton เพื่อให้เห็นการทำงานของ AI
             mp_draw.draw_landmarks(img, hl, mp_hands_module.HAND_CONNECTIONS)
             
             pts = [[int(l.x * w), int(l.y * h)] for l in hl.landmark]
             processed = pre_process_landmark(pts)
-            
-            # เตรียมข้อมูล 84 features (1 มือ)
             data_aux = processed + ([0.0] * 42)
             
             prediction = model.predict(np.array([data_aux[:84]]))[0]
@@ -78,24 +76,25 @@ def video_frame_callback(frame):
             
             if conf > 0.75:
                 res_thai = labels[int(prediction)]
-                # ส่งคำแปลเข้า Queue
-                result_queue.put(f"{res_thai} (มั่นใจ {conf:.2f})")
-                
-                # แสดง ID บนจอวิดีโอ
-                cv2.putText(img, f"ID: {prediction}", (20, 50), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                # ส่งเฉพาะคำแปลเข้า Queue (ไม่ต้องวาดลง img แล้ว)
+                result_queue.put(res_thai)
 
     return frame.from_ndarray(img, format="bgr24")
 
-# --- 4. ส่วนหน้าจอแอป (UI) ---
-st.title("🖐️ ระบบแปลภาษามือไทย")
+# --- 4. หน้าจอ UI ---
+st.markdown("<h1 style='text-align: center;'>🖐️ ระบบแปลภาษามือไทย</h1>", unsafe_allow_html=True)
 
-# สร้างช่องเขียวแบบ Dynamic (จองพื้นที่ไว้)
+# สร้างพื้นที่สำหรับช่องเขียวขนาดใหญ่พิเศษ
 output_placeholder = st.empty()
-output_placeholder.success("💡 ท่าทางที่พบ: กำลังรอการตรวจจับ...")
+output_placeholder.markdown(
+    "<div style='background-color: #1e3d2f; padding: 20px; border-radius: 10px; text-align: center;'>"
+    "<h1 style='color: white; margin: 0;'>กำลังรอการตรวจจับ...</h1>"
+    "</div>", 
+    unsafe_allow_html=True
+)
 
 webrtc_streamer(
-    key="fixed-final-app",
+    key="big-font-app",
     mode=WebRtcMode.SENDRECV,
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
     video_frame_callback=video_frame_callback,
@@ -103,13 +102,18 @@ webrtc_streamer(
     async_processing=True,
 )
 
-# --- 5. ลูปดึงค่าจาก Queue มาแสดงผล ---
+# --- 5. ลูปดึงค่ามาอัปเดตตัวอักษรขนาดใหญ่ ---
 while True:
     try:
-        # ดึงข้อความล่าสุดจาก Queue (รอไม่เกิน 0.1 วินาที)
-        result_text = result_queue.get(timeout=0.1)
-        # อัปเดตช่องสีเขียวทันทีที่ได้รับข้อมูล
-        output_placeholder.success(f"### ✅ ท่าทางที่พบ: {result_text}")
+        # ดึงคำแปลล่าสุด
+        msg = result_queue.get(timeout=0.1)
+        # อัปเดตช่องสีเขียวด้วย HTML เพื่อให้ตัวหนังสือใหญ่พิเศษ
+        output_placeholder.markdown(
+            f"<div style='background-color: #28a745; padding: 30px; border-radius: 10px; text-align: center; border: 2px solid white;'>"
+            f"<p style='color: white; font-size: 20px; margin-bottom: 5px;'>คำแปลที่พบ:</p>"
+            f"<h1 style='color: white; font-size: 80px; font-weight: bold; margin: 0;'>{msg}</h1>"
+            f"</div>", 
+            unsafe_allow_html=True
+        )
     except queue.Empty:
-        # หากไม่มีข้อมูลใหม่ ไม่ต้องทำอะไร
         continue
