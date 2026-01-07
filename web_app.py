@@ -1,7 +1,11 @@
 import streamlit as st
 
-# 1. ตั้งค่าหน้าเว็บ (ต้องเป็นบรรทัดแรก)
-st.set_page_config(page_title="Thai Sign Translator", layout="centered")
+# --- 1. ตั้งค่าหน้าเว็บเพื่อ SEO (สำคัญ: ต้องเป็นบรรทัดแรก) ---
+st.set_page_config(
+    page_title="แปลภาษามือไทยออนไลน์ - AI Sign Language Translator",
+    page_icon="🖐️",
+    layout="centered"
+)
 
 import cv2
 import mediapipe as mp
@@ -14,7 +18,16 @@ import itertools
 import queue
 from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
-# --- 2. โหลดทรัพยากร ---
+# --- 2. ข้อความอธิบายสำหรับ Google (SEO Section) ---
+st.title("🖐️ ระบบแปลภาษามือไทยแบบ Real-time")
+st.markdown("""
+### เครื่องมือช่วยแปลภาษามือไทยเป็นตัวอักษรด้วย AI
+แอปพลิเคชันนี้ใช้เทคโนโลยี **Machine Learning** และ **Mediapipe** เพื่อตรวจจับท่าทางมือและแปลเป็นภาษาไทยได้ทันทีผ่านกล้องเว็บแคม 
+เหมาะสำหรับการเรียนรู้ภาษามือเบื้องต้นและช่วยในการสื่อสาร
+""")
+st.markdown("---")
+
+# --- 3. โหลดทรัพยากร ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 model_path = os.path.join(BASE_DIR, 'keypoint_classifier_model.pkl')
 label_path = os.path.join(BASE_DIR, 'keypoint_classifier_label.csv')
@@ -40,7 +53,7 @@ def load_resources():
 
 model, labels, hands, mp_draw, mp_hands_module = load_resources()
 
-# --- 3. ฟังก์ชันประมวลผล ---
+# --- 4. ฟังก์ชันประมวลผล ---
 def pre_process_landmark(landmark_list):
     temp_landmark_list = copy.deepcopy(landmark_list)
     base_x, base_y = temp_landmark_list[0][0], temp_landmark_list[0][1]
@@ -91,21 +104,16 @@ def video_frame_callback(frame):
             
             if conf > 0.7:
                 res_thai = labels[int(prediction)]
-                # ส่งเฉพาะคำแปลเข้า Queue (ไม่มีการวาด PIL ลงบนรูปแล้ว)
                 result_queue.put(res_thai)
 
     return frame.from_ndarray(img, format="bgr24")
 
-# --- 4. หน้าตาเว็บ ---
-st.title("🖐️ ระบบแปลภาษามือไทย")
-st.markdown("---")
-
-# ใช้ st.empty() เพื่อสร้างพื้นที่สำหรับช่องเขียวขนาดใหญ่
+# --- 5. หน้าตาเว็บ ---
 output_container = st.empty()
 output_container.success("💡 ท่าทางที่พบ: กำลังรอการตรวจจับ...")
 
 webrtc_streamer(
-    key="thai-sign-final",
+    key="thai-sign-online",
     mode=WebRtcMode.SENDRECV,
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
     video_frame_callback=video_frame_callback,
@@ -116,14 +124,12 @@ webrtc_streamer(
 # --- ส่วนดึงข้อมูลมาแสดงผลตัวโตๆ ---
 while True:
     try:
-        # รับค่าจาก Queue
         msg = result_queue.get(timeout=1.0)
-        # แสดงผลในช่องเขียวด้วย HTML เพื่อปรับขนาดตัวอักษรให้ใหญ่พิเศษ (80px)
         output_container.markdown(
             f"""
             <div style="background-color: #d4edda; color: #155724; padding: 20px; border-radius: 10px; border: 1px solid #c3e6cb; text-align: center;">
                 <p style="margin: 0; font-size: 24px;">✅ ท่าทางที่พบ:</p>
-                <h1 style="margin: 0; font-size: 80px; font-weight: bold;">{msg}</h1>
+                <h1 style="margin: 0; font-size: 100px; font-weight: bold;">{msg}</h1>
             </div>
             """,
             unsafe_allow_html=True
