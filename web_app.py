@@ -1,6 +1,6 @@
 import streamlit as st
 
-# 1. ตั้งค่าหน้าเว็บ (ต้องอยู่บรรทัดแรก)
+# 1. ตั้งค่าหน้าเว็บ (ต้องเป็นบรรทัดแรกเสมอ)
 st.set_page_config(page_title="Thai Sign Language", layout="centered")
 
 import cv2
@@ -11,15 +11,15 @@ import os
 import pandas as pd
 import copy
 import itertools
-import queue  # เพิ่มตัวจัดการคิว
+import queue  # สำคัญ: ใช้สำหรับส่งข้อมูลจากกล้องมาที่หน้าจอ
 from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
-# --- 2. โหลดโมเดล ---
+# --- 2. โหลดทรัพยากร ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 model_path = os.path.join(BASE_DIR, 'keypoint_classifier_model.pkl')
 label_path = os.path.join(BASE_DIR, 'keypoint_classifier_label.csv')
 
-# สร้าง Queue สำหรับส่งค่าจากกล้องมาที่หน้าจอหลัก
+# สร้าง Queue เพื่อรับคำแปลจากวิดีโอ
 result_queue = queue.Queue()
 
 @st.cache_resource
@@ -32,7 +32,7 @@ def load_resources():
         df = pd.read_csv(label_path, header=None, encoding='utf-8')
         labels_list = df.iloc[:, 1].astype(str).tolist() if df.shape[1] > 1 else df.iloc[:, 0].astype(str).tolist()
     else:
-        labels_list = ["Error: No Labels"]
+        labels_list = ["No Labels Found"]
     
     mp_hands = mp.solutions.hands
     hands_engine = mp_hands.Hands(
@@ -69,6 +69,8 @@ def video_frame_callback(frame):
             
             pts = [[int(l.x * w), int(l.y * h)] for l in hl.landmark]
             processed = pre_process_landmark(pts)
+            
+            # เตรียมข้อมูล 84 features (1 มือ)
             data_aux = processed + ([0.0] * 42)
             
             prediction = model.predict(np.array([data_aux[:84]]))[0]
@@ -76,25 +78,24 @@ def video_frame_callback(frame):
             
             if conf > 0.75:
                 res_thai = labels[int(prediction)]
-                # ส่งคำแปลเข้า Queue เพื่อให้หน้าจอหลักดึงไปแสดง
+                # ส่งคำแปลเข้า Queue
                 result_queue.put(f"{res_thai} (มั่นใจ {conf:.2f})")
                 
-                # วาด ID บนจอเพื่อให้รู้ว่าระบบยังทำงาน
+                # แสดง ID บนจอวิดีโอ
                 cv2.putText(img, f"ID: {prediction}", (20, 50), 
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
     return frame.from_ndarray(img, format="bgr24")
 
-# --- 4. หน้าตาแอป (UI) ---
+# --- 4. ส่วนหน้าจอแอป (UI) ---
 st.title("🖐️ ระบบแปลภาษามือไทย")
 
-# สร้างพื้นที่สำหรับอัปเดตคำแปล (ช่องสีเขียว)
+# สร้างช่องเขียวแบบ Dynamic (จองพื้นที่ไว้)
 output_placeholder = st.empty()
 output_placeholder.success("💡 ท่าทางที่พบ: กำลังรอการตรวจจับ...")
 
-# เริ่มต้นกล้อง
 webrtc_streamer(
-    key="sign-stable-v2",
+    key="fixed-final-app",
     mode=WebRtcMode.SENDRECV,
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
     video_frame_callback=video_frame_callback,
@@ -102,12 +103,13 @@ webrtc_streamer(
     async_processing=True,
 )
 
-# ส่วนนี้จะคอยดึงค่าจาก Queue มาแสดงผลที่ช่องเขียว
+# --- 5. ลูปดึงค่าจาก Queue มาแสดงผล ---
 while True:
     try:
-        # ดึงข้อความล่าสุดออกมาโชว์
-        msg = result_queue.get(timeout=0.1)
-        output_placeholder.success(f"### ✅ ท่าทางที่พบ: {msg}")
+        # ดึงข้อความล่าสุดจาก Queue (รอไม่เกิน 0.1 วินาที)
+        result_text = result_queue.get(timeout=0.1)
+        # อัปเดตช่องสีเขียวทันทีที่ได้รับข้อมูล
+        output_placeholder.success(f"### ✅ ท่าทางที่พบ: {result_text}")
     except queue.Empty:
-        # ถ้าไม่มีการขยับมือใหม่ ก็ให้แสดงค่าเดิมไว้ก่อน
+        # หากไม่มีข้อมูลใหม่ ไม่ต้องทำอะไร
         continue
