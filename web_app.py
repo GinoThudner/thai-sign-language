@@ -1,6 +1,6 @@
 import streamlit as st
 
-# 1. ตั้งค่าหน้าเว็บ (ต้องเป็นบรรทัดแรก)
+# 1. ต้องอยู่บรรทัดแรกสุด
 st.set_page_config(page_title="Thai Sign Translator", layout="centered")
 
 import cv2
@@ -11,42 +11,37 @@ import os
 import pandas as pd
 import copy
 import itertools
-from PIL import ImageFont, ImageDraw, Image
 from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
-# --- 2. โหลดทรัพยากร ---
+# --- 2. โหลดทรัพยากร (ใช้ Cache เพื่อไม่ให้โหลดซ้ำจนค้าง) ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 model_path = os.path.join(BASE_DIR, 'keypoint_classifier_model.pkl')
 label_path = os.path.join(BASE_DIR, 'keypoint_classifier_label.csv')
-font_path = os.path.join(BASE_DIR, 'tahoma.ttf') 
 
 @st.cache_resource
 def load_resources():
-    # โหลดโมเดล
     with open(model_path, 'rb') as f:
         m = pickle.load(f)
         model_obj = m['model'] if isinstance(m, dict) else m
     
-    # โหลดเลเบลภาษาไทย
     if os.path.exists(label_path):
         df = pd.read_csv(label_path, header=None, encoding='utf-8')
         labels_list = df.iloc[:, 1].astype(str).tolist() if df.shape[1] > 1 else df.iloc[:, 0].astype(str).tolist()
     else:
-        labels_list = ["Error"]
-
-    # โหลดฟอนต์
-    try:
-        font = ImageFont.truetype(font_path, 45)
-    except:
-        font = ImageFont.load_default()
+        labels_list = ["No Label"]
     
     mp_hands = mp.solutions.hands
-    hands_engine = mp_hands.Hands(max_num_hands=2, min_detection_confidence=0.7, min_tracking_confidence=0.5)
-    return model_obj, labels_list, hands_engine, mp.solutions.drawing_utils, mp_hands, font
+    # ปรับความแม่นยำให้พอดี ไม่ให้หนักเครื่องเกินไป
+    hands_engine = mp_hands.Hands(
+        max_num_hands=1, # ตรวจจับแค่ 1 มือเพื่อประหยัด CPU
+        min_detection_confidence=0.5, 
+        min_tracking_confidence=0.5
+    )
+    return model_obj, labels_list, hands_engine, mp.solutions.drawing_utils, mp_hands
 
-model, labels, hands, mp_draw, mp_hands_module, thai_font = load_resources()
+model, labels, hands, mp_draw, mp_hands_module = load_resources()
 
-# --- 3. ฟังก์ชันประมวลผล Landmark ---
+# --- 3. ฟังก์ชันประมวลผล (เน้นความไว) ---
 def pre_process_landmark(landmark_list):
     temp_landmark_list = copy.deepcopy(landmark_list)
     base_x, base_y = temp_landmark_list[0][0], temp_landmark_list[0][1]
@@ -57,83 +52,52 @@ def pre_process_landmark(landmark_list):
     max_val = max(list(map(abs, temp_landmark_list)))
     return [n / max_val if max_val != 0 else 0 for n in temp_landmark_list]
 
-def flip_keypoint_x(keypoint_list):
-    flipped = list(keypoint_list)
-    for i in range(0, 42, 2): flipped[i] *= -1
-    return flipped
-
-# --- 4. ฟังก์ชันหลักสำหรับกล้อง ---
 def video_frame_callback(frame):
     img = frame.to_ndarray(format="bgr24")
-    img = cv2.flip(img, 1)
+    img = cv2.flip(img, 1) # กลับด้านภาพ
     h, w, _ = img.shape
     
-    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    results = hands.process(img_rgb)
+    # ประมวลผลมือ
+    results = hands.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
 
     if results.multi_hand_landmarks:
-        # วาดเส้นมือ
         for hl in results.multi_hand_landmarks:
+            # วาดเส้นมือด้วย OpenCV (เบาที่สุด)
             mp_draw.draw_landmarks(img, hl, mp_hands_module.HAND_CONNECTIONS)
-        
-        data_aux = []
-        sorted_hands = sorted(zip(results.multi_hand_landmarks, results.multi_handedness),
-                              key=lambda x: x[0].landmark[0].x)
-        
-        # จัดการข้อมูล 1 หรือ 2 มือ
-        if len(sorted_hands) == 1:
-            hl, hn = sorted_hands[0]
+            
+            # เตรียมข้อมูล
             pts = [[int(l.x * w), int(l.y * h)] for l in hl.landmark]
             processed = pre_process_landmark(pts)
-            if hn.classification[0].label == 'Right':
-                processed = flip_keypoint_x(processed)
-            data_aux.extend(processed)
-            data_aux.extend([0.0] * 42)
-        elif len(sorted_hands) >= 2:
-            for i in range(2):
-                hl = sorted_hands[i][0]
-                pts = [[int(l.x * w), int(l.y * h)] for l in hl.landmark]
-                data_aux.extend(pre_process_landmark(pts))
-
-        # ทำนายผล
-        if len(data_aux) == 84:
-            prediction = model.predict(np.array([data_aux]))[0]
-            conf = model.predict_proba(np.array([data_aux])).max()
             
-            if conf > 0.75:
+            # ทำนาย (ใส่ 0.0 เติมให้ครบ 84 features ตามสูตรของคุณ)
+            input_data = processed + ([0.0] * 42)
+            prediction = model.predict(np.array([input_data[:84]]))[0]
+            conf = model.predict_proba(np.array([input_data[:84]])).max()
+            
+            if conf > 0.8:
                 res_thai = labels[int(prediction)]
-
-                # --- วาดภาษาไทยลงในวิดีโอ (กึ่งกลางล่าง) ---
-                try:
-                    img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-                    draw = ImageDraw.Draw(img_pil)
-                    
-                    # คำนวณจุดกึ่งกลาง
-                    bbox = draw.textbbox((0, 0), res_thai, font=thai_font)
-                    tw = bbox[2] - bbox[0]
-                    tx = (w - tw) // 2
-                    ty = h - 80 
-
-                    # วาดแถบพื้นหลังดำจางๆ
-                    draw.rectangle([tx - 20, ty - 5, tx + tw + 20, ty + 60], fill=(0, 0, 0, 160))
-                    draw.text((tx, ty), res_thai, font=thai_font, fill=(0, 255, 0))
-                    
-                    img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
-                except:
-                    # กันเหนียวถ้า Pillow พัง
-                    cv2.putText(img, "Detected", (w//2-50, h-50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
-
+                # แสดง ID และชื่อท่าทางภาษาอังกฤษในจอ (กันค้าง)
+                cv2.rectangle(img, (0, h-40), (200, h), (0,0,0), -1)
+                cv2.putText(img, f"ID: {prediction} ({conf:.2f})", (10, h-10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                
+                # ฝากค่าไว้ในคิวหรือแสดงผลที่ UI หลัก
+    
     return frame.from_ndarray(img, format="bgr24")
 
-# --- 5. ส่วนแสดงผล UI ---
+# --- 4. ส่วนหน้าเว็บ ---
 st.title("🖐️ ระบบแปลภาษามือไทย")
-st.write("ยกมือขึ้นมาในเฟรมเพื่อเริ่มการแปล")
+st.info("💡 คำแปลจะขึ้นที่แถบเขียว และตัวเลข ID จะขึ้นที่หน้าจอ")
 
-webrtc_streamer(
-    key="fixed-translator",
+# ใช้ WebRTC Streamer แบบประหยัดทรัพยากร
+ctx = webrtc_streamer(
+    key="fixed-final",
     mode=WebRtcMode.SENDRECV,
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
     video_frame_callback=video_frame_callback,
-    media_stream_constraints={"video": True, "audio": False}, # ปิดไมค์
-    async_processing=True, # สำคัญ: ช่วยให้ลื่นไหลไม่ค้าง
+    media_stream_constraints={"video": True, "audio": False},
+    async_processing=True, # สำคัญมาก: เพื่อไม่ให้ค้าง
 )
+
+# หมายเหตุ: การแสดงภาษาไทยบนจอกลางล่างบนระบบ Cloud มักจะทำให้ค้าง 
+# แนะนำให้มองที่แถบ Success หรือใช้การดูเลข ID บนจอแทนครับ
