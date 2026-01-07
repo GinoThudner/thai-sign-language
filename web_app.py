@@ -101,23 +101,33 @@ def video_frame_callback(frame):
             
             if conf > 0.7:
                 res_thai = labels[int(prediction)]
-                result_queue.put(f"{res_thai} ({conf:.2f})")
+                # ส่งเข้า Queue ไปโชว์ที่แถบเขียวด้านบน
+                result_queue.put(f"{res_thai} (มั่นใจ {conf:.2f})")
 
-                # --- วาดภาษาไทยไว้กึ่งกลางด้านล่างวิดีโอ ---
-                img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-                draw = ImageDraw.Draw(img_pil)
-                
-                # คำนวณตำแหน่งกึ่งกลาง
-                bbox = draw.textbbox((0, 0), res_thai, font=thai_font)
-                text_w = bbox[2] - bbox[0]
-                text_x = (w - text_w) // 2
-                text_y = h - 70 # ย้ายไปไว้ด้านล่าง
+                # --- ส่วนที่แก้ไข: วาดภาษาไทยด้วย Pillow ไว้กลางล่าง ---
+                try:
+                    # แปลงภาพจาก OpenCV เป็น PIL Image
+                    img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                    draw = ImageDraw.Draw(img_pil)
+                    
+                    # คำนวณตำแหน่งกลางล่าง
+                    bbox = draw.textbbox((0, 0), res_thai, font=thai_font)
+                    text_w = bbox[2] - bbox[0]
+                    text_x = (w - text_w) // 2
+                    text_y = h - 80  # ห่างจากขอบล่าง 80 พิกเซล
 
-                # วาดพื้นหลังตัวหนังสือเพื่อให้เห็นชัด
-                draw.rectangle([text_x-10, text_y-5, text_x+text_w+10, text_y+50], fill=(0,0,0,150))
-                draw.text((text_x, text_y), res_thai, font=thai_font, fill=(0, 255, 0))
-                
-                img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+                    # วาดแถบพื้นหลังสีดำโปร่งแสงเพื่อให้เห็นตัวอักษรชัดขึ้น
+                    draw.rectangle([text_x - 15, text_y - 5, text_x + text_w + 15, text_y + 55], fill=(0, 0, 0, 160))
+                    
+                    # วาดภาษาไทยสีเขียว
+                    draw.text((text_x, text_y), res_thai, font=thai_font, fill=(0, 255, 0))
+                    
+                    # แปลงกลับเป็น OpenCV Image
+                    img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+                except Exception as e:
+                    # กรณีฟอนต์มีปัญหา ให้แสดง ID ภาษาอังกฤษแทนกันโปรแกรมค้าง
+                    cv2.putText(img, f"ID: {prediction}", (w//2 - 50, h - 50), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
     return frame.from_ndarray(img, format="bgr24")
 
@@ -143,3 +153,4 @@ while True:
         output_text.success(f"✅ ท่าทางที่พบ: {msg}")
     except queue.Empty:
         pass
+
