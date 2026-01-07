@@ -16,14 +16,11 @@ import pandas as pd
 import copy
 import itertools
 import queue
+import time
 from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
-# --- 2. ข้อความอธิบายสำหรับ Google ---
+# --- 2. ข้อความอธิบาย ---
 st.title("🖐️ ระบบแปลภาษามือไทยแบบ Real-time")
-st.markdown("""
-### เครื่องมือช่วยแปลภาษามือไทยเป็นตัวอักษรด้วย AI
-แอปพลิเคชันนี้ใช้เทคโนโลยี **Machine Learning** และ **Mediapipe** เพื่อตรวจจับท่าทางมือและแปลเป็นภาษาไทยได้ทันที
-""")
 st.markdown("---")
 
 # --- 3. โหลดทรัพยากร ---
@@ -46,13 +43,17 @@ def load_resources():
         labels_list = ["Error: No Label File"]
     
     mp_hands = mp.solutions.hands
-    # ปรับความมั่นใจลงเล็กน้อยให้ตรวจจับง่ายขึ้นบนมือถือ
-    hands_engine = mp_hands.Hands(max_num_hands=2, min_detection_confidence=0.5, min_tracking_confidence=0.5)
+    # ปรับ min_detection_confidence ให้ทำงานเร็วขึ้น
+    hands_engine = mp_hands.Hands(
+        max_num_hands=2, 
+        min_detection_confidence=0.5, 
+        min_tracking_confidence=0.5
+    )
     return model_obj, labels_list, hands_engine, mp.solutions.drawing_utils, mp_hands
 
 model, labels, hands, mp_draw, mp_hands_module = load_resources()
 
-# --- 4. ฟังก์ชันประมวลผล ---
+# --- 4. ฟังก์ชันประมวลผล (ปรับให้เบาที่สุด) ---
 def pre_process_landmark(landmark_list):
     temp_landmark_list = copy.deepcopy(landmark_list)
     base_x, base_y = temp_landmark_list[0][0], temp_landmark_list[0][1]
@@ -68,42 +69,51 @@ def flip_keypoint_x(keypoint_list):
     for i in range(0, 42, 2): flipped[i] *= -1
     return flipped
 
+# สร้างตัวแปรไว้เก็บเวลาเพื่อทำ Frame Skipping (ลดภาระ CPU)
+last_process_time = 0
+
 def video_frame_callback(frame):
+    global last_process_time
     img = frame.to_ndarray(format="bgr24")
     img = cv2.flip(img, 1)
-    h, w, _ = img.shape
-    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    results = hands.process(img_rgb)
+    
+    current_time = time.time()
+    # ประมวลผล AI ทุกๆ 0.1 วินาทีเท่านั้น (ประมาณ 10 fps) เพื่อไม่ให้มือถือค้าง
+    if current_time - last_process_time > 0.1:
+        last_process_time = current_time
+        h, w, _ = img.shape
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        results = hands.process(img_rgb)
 
-    if results.multi_hand_landmarks:
-        for hl in results.multi_hand_landmarks:
-            mp_draw.draw_landmarks(img, hl, mp_hands_module.HAND_CONNECTIONS)
-        
-        data_aux = []
-        sorted_hands = sorted(zip(results.multi_hand_landmarks, results.multi_handedness),
-                              key=lambda x: x[0].landmark[0].x)
-        
-        if len(sorted_hands) == 1:
-            hl, hn = sorted_hands[0]
-            pts = [[int(l.x * w), int(l.y * h)] for l in hl.landmark]
-            processed = pre_process_landmark(pts)
-            if hn.classification[0].label == 'Right':
-                processed = flip_keypoint_x(processed)
-            data_aux.extend(processed)
-            data_aux.extend([0.0] * 42)
-        elif len(sorted_hands) >= 2:
-            for i in range(2):
-                hl = sorted_hands[i][0]
-                pts = [[int(l.x * w), int(l.y * h)] for l in hl.landmark]
-                data_aux.extend(pre_process_landmark(pts))
-        
-        if len(data_aux) == 84:
-            prediction = model.predict(np.array([data_aux]))[0]
-            conf = model.predict_proba(np.array([data_aux])).max()
+        if results.multi_hand_landmarks:
+            # วาดเส้นจุดบนมือ (ลดความซับซ้อนลง)
+            for hl in results.multi_hand_landmarks:
+                mp_draw.draw_landmarks(img, hl, mp_hands_module.HAND_CONNECTIONS)
             
-            if conf > 0.6: # ปรับเกณฑ์ลงเหลือ 0.6 เพื่อให้แสดงผลไวขึ้น
-                res_thai = labels[int(prediction)]
-                result_queue.put(res_thai)
+            data_aux = []
+            sorted_hands = sorted(zip(results.multi_hand_landmarks, results.multi_handedness),
+                                  key=lambda x: x[0].landmark[0].x)
+            
+            if len(sorted_hands) == 1:
+                hl, hn = sorted_hands[0]
+                pts = [[int(l.x * w), int(l.y * h)] for l in hl.landmark]
+                processed = pre_process_landmark(pts)
+                if hn.classification[0].label == 'Right':
+                    processed = flip_keypoint_x(processed)
+                data_aux.extend(processed)
+                data_aux.extend([0.0] * 42)
+            elif len(sorted_hands) >= 2:
+                for i in range(2):
+                    hl = sorted_hands[i][0]
+                    pts = [[int(l.x * w), int(l.y * h)] for l in hl.landmark]
+                    data_aux.extend(pre_process_landmark(pts))
+            
+            if len(data_aux) == 84:
+                prediction = model.predict(np.array([data_aux]))[0]
+                conf = model.predict_proba(np.array([data_aux])).max()
+                if conf > 0.5: # ลดความเข้มงวดของค่าความมั่นใจเพื่อให้ตอบสนองไวขึ้น
+                    res_thai = labels[int(prediction)]
+                    result_queue.put(res_thai)
 
     return frame.from_ndarray(img, format="bgr24")
 
@@ -111,20 +121,18 @@ def video_frame_callback(frame):
 output_container = st.empty()
 output_container.success("💡 ท่าทางที่พบ: กำลังรอการตรวจจับ...")
 
-# ปรับปรุง webrtc_streamer ให้เหมาะกับมือถือ
 webrtc_streamer(
-    key="thai-sign-mobile-optimized",
+    key="thai-sign-v3", # เปลี่ยน Key ทุกครั้งที่แก้ปัญหาหน้าจอค้าง
     mode=WebRtcMode.SENDRECV,
     rtc_configuration={
         "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}],
         "iceTransportPolicy": "all",
     },
     video_frame_callback=video_frame_callback,
-    # ลดขนาดวิดีโอเพื่อให้มือถือประมวลผลทัน (480x360) และลดเฟรมเรตเหลือ 15
     media_stream_constraints={
         "video": {
-            "width": {"ideal": 480},
-            "height": {"ideal": 360},
+            "width": {"ideal": 320}, # ลดขนาดลงอีกเพื่อให้ลื่นที่สุด
+            "height": {"ideal": 240},
             "frameRate": {"ideal": 15}
         },
         "audio": False
@@ -132,14 +140,15 @@ webrtc_streamer(
     async_processing=True,
 )
 
+# ลูปดึงผลลัพธ์มาโชว์
 while True:
     try:
         msg = result_queue.get(timeout=1.0)
         output_container.markdown(
             f"""
-            <div style="background-color: #d4edda; color: #155724; padding: 20px; border-radius: 10px; border: 1px solid #c3e6cb; text-align: center;">
-                <p style="margin: 0; font-size: 20px;">✅ ท่าทางที่พบ:</p>
-                <h1 style="margin: 0; font-size: 70px; font-weight: bold;">{msg}</h1>
+            <div style="background-color: #d4edda; color: #155724; padding: 15px; border-radius: 10px; text-align: center;">
+                <p style="margin: 0; font-size: 18px;">✅ ท่าทางที่พบ:</p>
+                <h1 style="margin: 0; font-size: 60px; font-weight: bold;">{msg}</h1>
             </div>
             """,
             unsafe_allow_html=True
