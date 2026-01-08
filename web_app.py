@@ -7,26 +7,28 @@ import os
 import pandas as pd
 import copy
 import itertools
-import queue
-import collections # เพิ่มสำหรับเก็บประวัติพิกัด
+import collections
 from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
-# --- 1. ตั้งค่าหน้าเว็บเพื่อ SEO ---
+# --- 1. ตั้งค่าหน้าเว็บ ---
 st.set_page_config(
     page_title="แปลภาษามือไทยออนไลน์ - AI Sign Language Translator",
     page_icon="🖐️",
     layout="centered"
 )
 
-# --- 2. ส่วนเก็บความจำพิกัดย้อนหลัง (Motion History) ---
-# สร้างตัวเก็บพิกัด 15 เฟรมย้อนหลัง เพื่อใช้คำนวณการขยับ
+# --- 2. เตรียมระบบเก็บสถานะ (Session State) ---
+# ใช้เก็บประวัติพิกัดสำหรับ Motion
 if "history" not in st.session_state:
     st.session_state.history = collections.deque(maxlen=15)
 
-# --- 3. ข้อความอธิบาย ---
+# ใช้เก็บคำแปลล่าสุดเพื่อแสดงบนหน้าจอ (แก้ปัญหาค้าง)
+if "last_msg" not in st.session_state:
+    st.session_state.last_msg = "รอตรวจจับ..."
+
+# --- 3. ส่วนหัวข้อ ---
 st.title("🖐️ ระบบแปลภาษามือไทยแบบ Real-time")
 st.markdown("""
-### ตรวจจับทั้งท่าทางนิ่งและท่าทางการเคลื่อนไหว
 * **ท่าทางนิ่ง:** ใช้ AI ทำนายตามปกติ
 * **ขยับมือซ้าย-ขวา:** แปลว่า **"ไม่"**
 * **มือนิ่งสนิท:** แปลว่า **"หยุด"**
@@ -36,8 +38,6 @@ st.markdown("""
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 model_path = os.path.join(BASE_DIR, 'keypoint_classifier_model.pkl')
 label_path = os.path.join(BASE_DIR, 'keypoint_classifier_label.csv')
-
-result_queue = queue.Queue()
 
 @st.cache_resource
 def load_resources():
@@ -81,26 +81,23 @@ def video_frame_callback(frame):
     results = hands.process(img_rgb)
 
     if results.multi_hand_landmarks:
-        # ดึงพิกัดจุดที่ 9 (โคนนิ้วกลาง) เพื่อตรวจจับ Motion
+        # เก็บพิกัดจุดที่ 9 (โคนนิ้วกลาง)
         p9 = results.multi_hand_landmarks[0].landmark[9]
         st.session_state.history.append((p9.x, p9.y))
 
-        # --- ส่วนตรวจจับ Motion (ไม่/หยุด) ---
         motion_detected = False
         if len(st.session_state.history) == 15:
-            # คำนวณความต่างของ X และ Y
             dx = st.session_state.history[-1][0] - st.session_state.history[0][0]
             dy = st.session_state.history[-1][1] - st.session_state.history[0][1]
             speed = (dx**2 + dy**2)**0.5
 
-            if abs(dx) > 0.12: # ส่ายมือซ้ายขวาแรงพอ
-                result_queue.put("ไม่")
+            if abs(dx) > 0.12: 
+                st.session_state.last_msg = "ไม่"
                 motion_detected = True
-            elif speed < 0.005: # มือนิ่งมากจริงๆ
-                result_queue.put("หยุด")
+            elif speed < 0.005: 
+                st.session_state.last_msg = "หยุด"
                 motion_detected = True
 
-        # --- ถ้าไม่ใช่การขยับพิเศษ ให้ใช้ AI ทำนายท่าทางปกติ ---
         if not motion_detected:
             for hl in results.multi_hand_landmarks:
                 mp_draw.draw_landmarks(img, hl, mp_hands_module.HAND_CONNECTIONS)
@@ -127,22 +124,33 @@ def video_frame_callback(frame):
                 prediction = model.predict(np.array([data_aux]))[0]
                 conf = model.predict_proba(np.array([data_aux])).max()
                 if conf > 0.6:
-                    result_queue.put(labels[int(prediction)])
+                    st.session_state.last_msg = labels[int(prediction)]
 
     return frame.from_ndarray(img, format="bgr24")
 
-# --- 6. หน้าตาเว็บ ---
+# --- 6. ส่วนการแสดงผล ---
+# กล่องแสดงคำแปล (วางไว้ก่อนหน้าจอวิดีโอเพื่อให้เห็นชัด)
 output_container = st.empty()
+output_container.markdown(
+    f"""
+    <div style="background-color: #d4edda; color: #155724; padding: 20px; border-radius: 10px; border: 1px solid #c3e6cb; text-align: center; margin-bottom: 20px;">
+        <p style="margin: 0; font-size: 20px;">✅ ท่าทางที่พบ:</p>
+        <h1 style="margin: 0; font-size: 70px; font-weight: bold;">{st.session_state.last_msg}</h1>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
+# หน้าจอวิดีโอ
 webrtc_streamer(
-    key="motion-detect-v1",
+    key="motion-detect-v2", # เปลี่ยน Key เพื่อรีเซ็ต
     mode=WebRtcMode.SENDRECV,
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
     video_frame_callback=video_frame_callback,
     media_stream_constraints={
         "video": {
-            "width": {"exact": 640}, 
-            "height": {"exact": 480}, 
+            "width": {"ideal": 640}, # ใช้ ideal แทน exact เพื่อลดปัญหาภาพลาย
+            "height": {"ideal": 480}, 
             "frameRate": {"ideal": 15}
         },
         "audio": False
@@ -150,17 +158,6 @@ webrtc_streamer(
     async_processing=True,
 )
 
-while True:
-    try:
-        msg = result_queue.get(timeout=1.0)
-        output_container.markdown(
-            f"""
-            <div style="background-color: #d4edda; color: #155724; padding: 20px; border-radius: 10px; border: 1px solid #c3e6cb; text-align: center;">
-                <p style="margin: 0; font-size: 20px;">✅ ท่าทางที่พบ:</p>
-                <h1 style="margin: 0; font-size: 70px; font-weight: bold;">{msg}</h1>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-    except queue.Empty:
-        pass
+# ปุ่มกดเผื่อต้องการบังคับ Refresh หน้าจอ
+if st.button("รีเฟรชคำแปล"):
+    st.rerun()
