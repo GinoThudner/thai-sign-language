@@ -1,4 +1,12 @@
 import streamlit as st
+
+# --- 1. ตั้งค่าหน้าเว็บเพื่อ SEO ---
+st.set_page_config(
+    page_title="แปลภาษามือไทยออนไลน์ - AI Sign Language Translator",
+    page_icon="🖐️",
+    layout="centered"
+)
+
 import cv2
 import mediapipe as mp
 import pickle
@@ -7,25 +15,23 @@ import os
 import pandas as pd
 import copy
 import itertools
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
+import queue
+from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
-# --- 1. ตั้งค่าหน้าเว็บ ---
-st.set_page_config(
-    page_title="แปลภาษามือไทยออนไลน์ - AI Sign Language",
-    page_icon="🖐️",
-    layout="centered"
-)
-
+# --- 2. ข้อความอธิบายสำหรับ Google ---
 st.title("🖐️ ระบบแปลภาษามือไทยแบบ Real-time")
-st.markdown("หากพบปัญหาจอดำหรือหมุนค้าง ให้ลองสลับไปใช้ **เน็ตมือถือ** แทน WiFi")
+st.markdown("""
+### เครื่องมือช่วยแปลภาษามือไทยเป็นตัวอักษรด้วย AI
+แอปพลิเคชันนี้ใช้เทคโนโลยี **Machine Learning** และ **Mediapipe** เพื่อตรวจจับท่าทางมือและแปลเป็นภาษาไทยได้ทันที
+""")
+st.markdown("---")
 
-# --- 2. โหลดทรัพยากร ---
+# --- 3. โหลดทรัพยากร ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 model_path = os.path.join(BASE_DIR, 'keypoint_classifier_model.pkl')
 label_path = os.path.join(BASE_DIR, 'keypoint_classifier_label.csv')
 
-if "last_pred" not in st.session_state:
-    st.session_state.last_pred = "รอตรวจจับ..."
+result_queue = queue.Queue()
 
 @st.cache_resource
 def load_resources():
@@ -40,16 +46,13 @@ def load_resources():
         labels_list = ["Error: No Label File"]
     
     mp_hands = mp.solutions.hands
-    hands_engine = mp_hands.Hands(
-        max_num_hands=2, 
-        min_detection_confidence=0.7,
-        min_tracking_confidence=0.5
-    )
+    # ปรับความมั่นใจลงเล็กน้อยให้ตรวจจับง่ายขึ้นบนมือถือ
+    hands_engine = mp_hands.Hands(max_num_hands=2, min_detection_confidence=0.5, min_tracking_confidence=0.5)
     return model_obj, labels_list, hands_engine, mp.solutions.drawing_utils, mp_hands
 
 model, labels, hands, mp_draw, mp_hands_module = load_resources()
 
-# --- 3. ฟังก์ชันประมวลผล ---
+# --- 4. ฟังก์ชันประมวลผล ---
 def pre_process_landmark(landmark_list):
     temp_landmark_list = copy.deepcopy(landmark_list)
     base_x, base_y = temp_landmark_list[0][0], temp_landmark_list[0][1]
@@ -69,17 +72,16 @@ def video_frame_callback(frame):
     img = frame.to_ndarray(format="bgr24")
     img = cv2.flip(img, 1)
     h, w, _ = img.shape
-    
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     results = hands.process(img_rgb)
 
     if results.multi_hand_landmarks:
+        for hl in results.multi_hand_landmarks:
+            mp_draw.draw_landmarks(img, hl, mp_hands_module.HAND_CONNECTIONS)
+        
         data_aux = []
         sorted_hands = sorted(zip(results.multi_hand_landmarks, results.multi_handedness),
                               key=lambda x: x[0].landmark[0].x)
-        
-        for hl in results.multi_hand_landmarks:
-            mp_draw.draw_landmarks(img, hl, mp_hands_module.HAND_CONNECTIONS)
         
         if len(sorted_hands) == 1:
             hl, hn = sorted_hands[0]
@@ -98,36 +100,30 @@ def video_frame_callback(frame):
         if len(data_aux) == 84:
             prediction = model.predict(np.array([data_aux]))[0]
             conf = model.predict_proba(np.array([data_aux])).max()
-            if conf > 0.7:
-                st.session_state.last_pred = labels[int(prediction)]
+            
+            if conf > 0.6: # ปรับเกณฑ์ลงเหลือ 0.6 เพื่อให้แสดงผลไวขึ้น
+                res_thai = labels[int(prediction)]
+                result_queue.put(res_thai)
 
     return frame.from_ndarray(img, format="bgr24")
 
-# --- 4. หัวใจสำคัญ: การตั้งค่าแก้ปัญหา Network Error ---
-# เพิ่ม STUN servers หลายตัวเพื่อกระจายความเสี่ยง
-RTC_CONFIGURATION = RTCConfiguration(
-    {
-        "iceServers": [
-            {"urls": ["stun:stun.l.google.com:19302"]},
-            {"urls": ["stun:stun1.l.google.com:19302"]},
-            {"urls": ["stun:stun2.l.google.com:19302"]},
-            {"urls": ["stun:stun.services.mozilla.com"]}
-        ],
-        "iceTransportPolicy": "all",
-    }
-)
+# --- 5. หน้าตาเว็บ ---
+output_container = st.empty()
+output_container.success("💡 ท่าทางที่พบ: กำลังรอการตรวจจับ...")
 
-# --- 5. การแสดงผล UI ---
-res_box = st.empty()
-
+# ปรับปรุง webrtc_streamer ให้เหมาะกับมือถือ
 webrtc_streamer(
-    key="fixed-network-v2", 
+    key="thai-sign-mobile-optimized",
     mode=WebRtcMode.SENDRECV,
-    rtc_configuration=RTC_CONFIGURATION,
+    rtc_configuration={
+        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}],
+        "iceTransportPolicy": "all",
+    },
     video_frame_callback=video_frame_callback,
+    # ลดขนาดวิดีโอเพื่อให้มือถือประมวลผลทัน (480x360) และลดเฟรมเรตเหลือ 15
     media_stream_constraints={
         "video": {
-            "width": {"ideal": 480}, 
+            "width": {"ideal": 480},
             "height": {"ideal": 360},
             "frameRate": {"ideal": 15}
         },
@@ -136,12 +132,17 @@ webrtc_streamer(
     async_processing=True,
 )
 
-res_box.markdown(
-    f"""
-    <div style="background-color: #1e1e1e; padding: 20px; border-radius: 10px; border: 2px solid #00ff00; text-align: center;">
-        <p style="margin: 0; font-size: 18px; color: #ffffff;">✅ ท่าทางที่พบ:</p>
-        <h1 style="margin: 0; font-size: 60px; font-weight: bold; color: #00ff00;">{st.session_state.last_pred}</h1>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+while True:
+    try:
+        msg = result_queue.get(timeout=1.0)
+        output_container.markdown(
+            f"""
+            <div style="background-color: #d4edda; color: #155724; padding: 20px; border-radius: 10px; border: 1px solid #c3e6cb; text-align: center;">
+                <p style="margin: 0; font-size: 20px;">✅ ท่าทางที่พบ:</p>
+                <h1 style="margin: 0; font-size: 70px; font-weight: bold;">{msg}</h1>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    except queue.Empty:
+        pass
