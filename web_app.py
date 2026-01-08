@@ -106,17 +106,19 @@ placeholder.markdown(
 )
 
 webrtc_streamer(
-    key="fix-freeze-v5", # เปลี่ยน Key ทุกครั้งที่แก้โค้ดเพื่อ Reset Browser
+    key="clear-view-v4", # เปลี่ยน Key ทุกครั้งเพื่อให้เบราว์เซอร์รีเซ็ตค่าใหม่
     mode=WebRtcMode.SENDRECV,
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
     video_frame_callback=video_frame_callback,
     media_stream_constraints={
         "video": {
-            "width": 480, # ลดความละเอียดลงเพื่อความลื่นไหล
-            "height": 360,
-            "frameRate": 10
+            "width": 640,  # กลับมาใช้ความละเอียดมาตรฐาน
+            "height": 480,
+            "frameRate": {"ideal": 10, "max": 15}, # ลดเฟรมเรตลงเพื่อให้เน็ตส่งข้อมูลทัน ภาพจะไม่ลาย
+            "facingMode": "user" # บังคับใช้กล้องหน้า
         },
         "audio": False
     },
     async_processing=True,
 )
+
