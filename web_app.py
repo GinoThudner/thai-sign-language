@@ -113,23 +113,22 @@ output_container.success("💡 ท่าทางที่พบ: กำลั�
 
 # ปรับปรุง webrtc_streamer ให้เหมาะกับมือถือ
 webrtc_streamer(
-    key="thai-sign-mobile-optimized",
+    key="fix-glitch-v100", # เปลี่ยน Key เพื่อรีเซ็ตการเชื่อมต่อใหม่
     mode=WebRtcMode.SENDRECV,
     rtc_configuration={
-        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}],
-        "iceTransportPolicy": "all",
+        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
     },
     video_frame_callback=video_frame_callback,
-    # ลดขนาดวิดีโอเพื่อให้มือถือประมวลผลทัน (480x360) และลดเฟรมเรตเหลือ 15
     media_stream_constraints={
         "video": {
-            "width": {"ideal": 480},
-            "height": {"ideal": 360},
-            "frameRate": {"ideal": 15}
+            # ล็อคขนาดให้เล็กลงเพื่อความเสถียรบนมือถือและแก้ภาพลาย
+            "width": {"exact": 640}, 
+            "height": {"exact": 480}, 
+            "frameRate": {"ideal": 15, "max": 20}
         },
         "audio": False
     },
-    async_processing=True,
+    async_processing=True, # สำคัญ: ช่วยให้ UI ไม่ค้างขณะประมวลผล AI
 )
 
 while True:
@@ -146,3 +145,4 @@ while True:
         )
     except queue.Empty:
         pass
+
