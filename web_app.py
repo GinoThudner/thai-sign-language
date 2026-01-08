@@ -7,7 +7,7 @@ import os
 import pandas as pd
 import copy
 import itertools
-from streamlit_webrtc import webrtc_streamer, WebRtcMode
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 
 # 1. ตั้งค่าหน้าเว็บ
 st.set_page_config(page_title="แปลภาษามือไทย", page_icon="🖐️", layout="centered")
@@ -29,7 +29,11 @@ def load_all():
     labels_list = pd.read_csv(label_path, header=None).iloc[:, -1].astype(str).tolist()
     
     mp_hands = mp.solutions.hands
-    hands_engine = mp_hands.Hands(max_num_hands=2, min_detection_confidence=0.5)
+    hands_engine = mp_hands.Hands(
+        max_num_hands=2, 
+        min_detection_confidence=0.7, # เพิ่มความเข้มงวดเพื่อความแม่นยำ
+        min_tracking_confidence=0.5
+    )
     return model_obj, labels_list, hands_engine, mp.solutions.drawing_utils, mp_hands
 
 model, labels, hands, mp_draw, mp_hands_module = load_all()
@@ -50,7 +54,7 @@ def flip_keypoint_x(keypoint_list):
     for i in range(0, 42, 2): flipped[i] *= -1
     return flipped
 
-# 5. ตัวแปรเก็บผลลัพธ์ (ใช้ Session State เพื่อความเสถียรบนมือถือ)
+# 5. ตัวแปรเก็บผลลัพธ์
 if "last_pred" not in st.session_state:
     st.session_state.last_pred = "รอตรวจจับ..."
 
@@ -59,7 +63,6 @@ def video_frame_callback(frame):
     img = cv2.flip(img, 1)
     h, w, _ = img.shape
     
-    # แก้ไขจุดที่ผิด: ต้องสร้าง RGB ก่อนเรียกใช้ AI
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     results = hands.process(img_rgb)
 
@@ -68,7 +71,6 @@ def video_frame_callback(frame):
         for hl in results.multi_hand_landmarks:
             mp_draw.draw_landmarks(img, hl, mp_hands_module.HAND_CONNECTIONS)
             
-        # จัดการ Landmark 1 หรือ 2 มือ
         sorted_hands = sorted(zip(results.multi_hand_landmarks, results.multi_handedness),
                               key=lambda x: x[0].landmark[0].x)
         
@@ -87,29 +89,42 @@ def video_frame_callback(frame):
         
         if len(data_aux) == 84:
             prediction = model.predict(np.array([data_aux]))[0]
-            st.session_state.last_pred = labels[int(prediction)]
+            conf = model.predict_proba(np.array([data_aux])).max()
+            if conf > 0.6: # แสดงผลเฉพาะค่าที่มั่นใจ
+                st.session_state.last_pred = labels[int(prediction)]
 
     return frame.from_ndarray(img, format="bgr24")
 
-# 6. แสดงผลลัพธ์
-res_box = st.empty()
+# 6. เพิ่มระบบ RTC Configuration ให้เสถียรขึ้น
+RTC_CONFIGURATION = RTCConfiguration(
+    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]}]}
+)
 
 # 7. ตัวรับส่งวิดีโอ (WebRTC)
-webrtc_streamer(
-    key="universal-sign-v10", # เปลี่ยน Key เพื่อ Reset ระบบ
+ctx = webrtc_streamer(
+    key="universal-sign-v11", # เปลี่ยน Key ทุกครั้งที่แก้โค้ดเพื่อ Reset Cache
     mode=WebRtcMode.SENDRECV,
-    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+    rtc_configuration=RTC_CONFIGURATION,
     video_frame_callback=video_frame_callback,
     media_stream_constraints={
-        "video": {"width": {"ideal": 320}, "height": {"ideal": 240}, "frameRate": {"ideal": 15}},
+        "video": {
+            "width": {"ideal": 480}, 
+            "height": {"ideal": 360}, 
+            "frameRate": {"ideal": 20}
+        },
         "audio": False
     },
     async_processing=True,
 )
 
-# อัปเดตข้อความบนหน้าจอ
+# 8. อัปเดตข้อความบนหน้าจอ (ทำให้เปลี่ยนตามผลลัพธ์อัตโนมัติ)
+res_box = st.empty()
 res_box.markdown(f"""
-    <div style="background-color:#1e1e1e; padding:20px; border-radius:10px; text-align:center;">
-        <h2 style="color:#00ff00; margin:0;">พบท่าทาง: {st.session_state.last_pred}</h2>
+    <div style="background-color:#1e1e1e; padding:20px; border-radius:10px; text-align:center; border: 2px solid #00ff00;">
+        <h2 style="color:#00ff00; margin:0; font-family: sans-serif;">✅ พบท่าทาง: {st.session_state.last_pred}</h2>
     </div>
 """, unsafe_allow_html=True)
+
+# บังคับให้หน้าจอ Refresh เมื่อมีการทำนายผลใหม่
+if ctx.state.playing:
+    st.button("ล้างคำแปล", on_click=lambda: st.session_state.update({"last_pred": "รอตรวจจับ..."}))
