@@ -111,15 +111,16 @@ placeholder.markdown(
 
 # สตรีมวิดีโอขนาดเล็กเพื่อลด Glitch
 webrtc_streamer(
-    key="fixed-final-v1",
+    key="clear-view-v4", # เปลี่ยน Key ทุกครั้งเพื่อให้เบราว์เซอร์รีเซ็ตค่าใหม่
     mode=WebRtcMode.SENDRECV,
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
     video_frame_callback=video_frame_callback,
     media_stream_constraints={
         "video": {
-            "width": {"ideal": 320}, 
-            "height": {"ideal": 240}, 
-            "frameRate": {"ideal": 12}
+            "width": 640,  # กลับมาใช้ความละเอียดมาตรฐาน
+            "height": 480,
+            "frameRate": {"ideal": 10, "max": 15}, # ลดเฟรมเรตลงเพื่อให้เน็ตส่งข้อมูลทัน ภาพจะไม่ลาย
+            "facingMode": "user" # บังคับใช้กล้องหน้า
         },
         "audio": False
     },
@@ -129,3 +130,4 @@ webrtc_streamer(
 if st.button("รีเฟรช / ล้างคำแปล"):
     st.session_state.last_msg = "รอตรวจจับ..."
     st.rerun()
+
