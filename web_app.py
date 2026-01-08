@@ -23,18 +23,22 @@ label_path = os.path.join(BASE_DIR, 'keypoint_classifier_label.csv')
 
 @st.cache_resource
 def load_all():
-    with open(model_path, 'rb') as f:
-        m = pickle.load(f)
-        model_obj = m['model'] if isinstance(m, dict) else m
-    labels_list = pd.read_csv(label_path, header=None).iloc[:, -1].astype(str).tolist()
-    
-    mp_hands = mp.solutions.hands
-    hands_engine = mp_hands.Hands(
-        max_num_hands=2, 
-        min_detection_confidence=0.7, # เพิ่มความเข้มงวดเพื่อความแม่นยำ
-        min_tracking_confidence=0.5
-    )
-    return model_obj, labels_list, hands_engine, mp.solutions.drawing_utils, mp_hands
+    try:
+        with open(model_path, 'rb') as f:
+            m = pickle.load(f)
+            model_obj = m['model'] if isinstance(m, dict) else m
+        labels_list = pd.read_csv(label_path, header=None).iloc[:, -1].astype(str).tolist()
+        
+        mp_hands = mp.solutions.hands
+        hands_engine = mp_hands.Hands(
+            max_num_hands=2, 
+            min_detection_confidence=0.7, 
+            min_tracking_confidence=0.5
+        )
+        return model_obj, labels_list, hands_engine, mp.solutions.drawing_utils, mp_hands
+    except Exception as e:
+        st.error(f"ไม่สามารถโหลดโมเดลได้: {e}")
+        return None, [], None, None, None
 
 model, labels, hands, mp_draw, mp_hands_module = load_all()
 
@@ -63,6 +67,7 @@ def video_frame_callback(frame):
     img = cv2.flip(img, 1)
     h, w, _ = img.shape
     
+    # ต้องสร้าง RGB ก่อนเรียกใช้ AI (แก้จุดผิดเดิม)
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     results = hands.process(img_rgb)
 
@@ -87,44 +92,35 @@ def video_frame_callback(frame):
                 pts = [[int(l.x * w), int(l.y * h)] for l in hl.landmark]
                 data_aux.extend(pre_process_landmark(pts))
         
-        if len(data_aux) == 84:
+        if len(data_aux) == 84 and model is not None:
             prediction = model.predict(np.array([data_aux]))[0]
-            conf = model.predict_proba(np.array([data_aux])).max()
-            if conf > 0.6: # แสดงผลเฉพาะค่าที่มั่นใจ
-                st.session_state.last_pred = labels[int(prediction)]
+            st.session_state.last_pred = labels[int(prediction)]
 
     return frame.from_ndarray(img, format="bgr24")
 
-# 6. เพิ่มระบบ RTC Configuration ให้เสถียรขึ้น
-RTC_CONFIGURATION = RTCConfiguration(
-    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]}]}
-)
+# 6. แสดงผลลัพธ์ UI
+res_box = st.empty()
+res_box.markdown(f"""
+    <div style="background-color:#1e1e1e; padding:20px; border-radius:10px; text-align:center; border: 2px solid #00ff00;">
+        <h2 style="color:#00ff00; margin:0;">✅ พบท่าทาง: {st.session_state.last_pred}</h2>
+    </div>
+""", unsafe_allow_html=True)
 
-# 7. ตัวรับส่งวิดีโอ (WebRTC)
-ctx = webrtc_streamer(
-    key="universal-sign-v11", # เปลี่ยน Key ทุกครั้งที่แก้โค้ดเพื่อ Reset Cache
+# 7. ตัวรับส่งวิดีโอ (WebRTC) - เพิ่มความเสถียรในการเชื่อมต่อ
+webrtc_streamer(
+    key="thai-sign-v12", # เปลี่ยน Key เพื่อล้าง Cache
     mode=WebRtcMode.SENDRECV,
-    rtc_configuration=RTC_CONFIGURATION,
+    rtc_configuration={
+        "iceServers": [{"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]}]
+    },
     video_frame_callback=video_frame_callback,
     media_stream_constraints={
         "video": {
             "width": {"ideal": 480}, 
             "height": {"ideal": 360}, 
-            "frameRate": {"ideal": 20}
+            "frameRate": {"ideal": 15}
         },
         "audio": False
     },
     async_processing=True,
 )
-
-# 8. อัปเดตข้อความบนหน้าจอ (ทำให้เปลี่ยนตามผลลัพธ์อัตโนมัติ)
-res_box = st.empty()
-res_box.markdown(f"""
-    <div style="background-color:#1e1e1e; padding:20px; border-radius:10px; text-align:center; border: 2px solid #00ff00;">
-        <h2 style="color:#00ff00; margin:0; font-family: sans-serif;">✅ พบท่าทาง: {st.session_state.last_pred}</h2>
-    </div>
-""", unsafe_allow_html=True)
-
-# บังคับให้หน้าจอ Refresh เมื่อมีการทำนายผลใหม่
-if ctx.state.playing:
-    st.button("ล้างคำแปล", on_click=lambda: st.session_state.update({"last_pred": "รอตรวจจับ..."}))
