@@ -1,6 +1,6 @@
 import streamlit as st
 
-# --- 1. ตั้งค่าหน้าเว็บเพื่อ SEO (สำคัญ: ต้องเป็นบรรทัดแรก) ---
+# --- 1. ตั้งค่าหน้าเว็บ (ต้องเป็นบรรทัดแรกสุด) ---
 st.set_page_config(
     page_title="แปลภาษามือไทยออนไลน์ - AI Sign Language Translator",
     page_icon="🖐️",
@@ -16,15 +16,12 @@ import pandas as pd
 import copy
 import itertools
 import queue
-from streamlit_webrtc import webrtc_streamer, WebRtcMode
+import time
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 
-# --- 2. ข้อความอธิบายสำหรับ Google (SEO Section) ---
+# --- 2. ข้อความอธิบาย ---
 st.title("🖐️ ระบบแปลภาษามือไทยแบบ Real-time")
-st.markdown("""
-### เครื่องมือช่วยแปลภาษามือไทยเป็นตัวอักษรด้วย AI
-แอปพลิเคชันนี้ใช้เทคโนโลยี **Machine Learning** และ **Mediapipe** เพื่อตรวจจับท่าทางมือและแปลเป็นภาษาไทยได้ทันทีผ่านกล้องเว็บแคม 
-เหมาะสำหรับการเรียนรู้ภาษามือเบื้องต้นและช่วยในการสื่อสาร
-""")
+st.markdown("รองรับทั้งคอมพิวเตอร์และมือถือ (แนะนำเปิดผ่าน Chrome หรือ Safari)")
 st.markdown("---")
 
 # --- 3. โหลดทรัพยากร ---
@@ -32,8 +29,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 model_path = os.path.join(BASE_DIR, 'keypoint_classifier_model.pkl')
 label_path = os.path.join(BASE_DIR, 'keypoint_classifier_label.csv')
 
-# Queue สำหรับส่งข้อความจากกล้องมาที่ UI
-result_queue = queue.Queue()
+# ใช้ Session State เก็บผลลัพธ์เพื่อความเสถียร
+if "last_pred" not in st.session_state:
+    st.session_state.last_pred = "รอตรวจจับ..."
 
 @st.cache_resource
 def load_resources():
@@ -48,12 +46,16 @@ def load_resources():
         labels_list = ["Error: No Label File"]
     
     mp_hands = mp.solutions.hands
-    hands_engine = mp_hands.Hands(max_num_hands=2, min_detection_confidence=0.7)
+    hands_engine = mp_hands.Hands(
+        max_num_hands=2, 
+        min_detection_confidence=0.7,
+        min_tracking_confidence=0.5
+    )
     return model_obj, labels_list, hands_engine, mp.solutions.drawing_utils, mp_hands
 
 model, labels, hands, mp_draw, mp_hands_module = load_resources()
 
-# --- 4. ฟังก์ชันประมวลผล ---
+# --- 4. ฟังก์ชันประมวลผล Landmark ---
 def pre_process_landmark(landmark_list):
     temp_landmark_list = copy.deepcopy(landmark_list)
     base_x, base_y = temp_landmark_list[0][0], temp_landmark_list[0][1]
@@ -73,6 +75,8 @@ def video_frame_callback(frame):
     img = frame.to_ndarray(format="bgr24")
     img = cv2.flip(img, 1)
     h, w, _ = img.shape
+    
+    # 1. สร้าง img_rgb ก่อนส่งให้ AI
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     results = hands.process(img_rgb)
 
@@ -101,38 +105,51 @@ def video_frame_callback(frame):
         if len(data_aux) == 84:
             prediction = model.predict(np.array([data_aux]))[0]
             conf = model.predict_proba(np.array([data_aux])).max()
-            
             if conf > 0.7:
-                res_thai = labels[int(prediction)]
-                result_queue.put(res_thai)
+                st.session_state.last_pred = labels[int(prediction)]
 
     return frame.from_ndarray(img, format="bgr24")
 
-# --- 5. หน้าตาเว็บ ---
-output_container = st.empty()
-output_container.success("💡 ท่าทางที่พบ: กำลังรอการตรวจจับ...")
+# --- 5. การตั้งค่า WebRTC (แก้ Error Network) ---
+RTC_CONFIGURATION = RTCConfiguration(
+    {
+        "iceServers": [
+            {"urls": ["stun:stun.l.google.com:19302"]},
+            {"urls": ["stun:stun1.l.google.com:19302"]}
+        ],
+        "iceTransportPolicy": "all",
+    }
+)
 
-webrtc_streamer(
-    key="thai-sign-online",
+# --- 6. แสดงผล UI ---
+output_container = st.empty()
+
+ctx = webrtc_streamer(
+    key="thai-sign-v2026", # เปลี่ยน Key เพื่อล้างค่าเก่า
     mode=WebRtcMode.SENDRECV,
-    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+    rtc_configuration=RTC_CONFIGURATION,
     video_frame_callback=video_frame_callback,
-    media_stream_constraints={"video": True, "audio": False},
+    media_stream_constraints={
+        "video": {
+            "width": {"ideal": 480}, 
+            "height": {"ideal": 360},
+            "frameRate": {"ideal": 15}
+        },
+        "audio": False
+    },
     async_processing=True,
 )
 
-# --- ส่วนดึงข้อมูลมาแสดงผลตัวโตๆ ---
-while True:
-    try:
-        msg = result_queue.get(timeout=1.0)
-        output_container.markdown(
-            f"""
-            <div style="background-color: #d4edda; color: #155724; padding: 20px; border-radius: 10px; border: 1px solid #c3e6cb; text-align: center;">
-                <p style="margin: 0; font-size: 24px;">✅ ท่าทางที่พบ:</p>
-                <h1 style="margin: 0; font-size: 100px; font-weight: bold;">{msg}</h1>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-    except queue.Empty:
-        pass
+# อัปเดตผลลัพธ์ตัวโตๆ
+output_container.markdown(
+    f"""
+    <div style="background-color: #1e1e1e; padding: 20px; border-radius: 10px; border: 2px solid #00ff00; text-align: center;">
+        <p style="margin: 0; font-size: 20px; color: #ffffff;">✅ ท่าทางที่พบ:</p>
+        <h1 style="margin: 0; font-size: 80px; font-weight: bold; color: #00ff00;">{st.session_state.last_pred}</h1>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+if ctx.state.playing:
+    st.button("ล้างคำแปล", on_click=lambda: st.session_state.update({"last_pred": "รอตรวจจับ..."}))
