@@ -74,47 +74,33 @@ last_process_time = 0
 
 def video_frame_callback(frame):
     global last_process_time
+    # 1. รับค่าภาพเข้ามา
     img = frame.to_ndarray(format="bgr24")
-    img = cv2.flip(img, 1)
+    img = cv2.flip(img, 1) # กลับด้านภาพให้เหมือนกระจก
     
     current_time = time.time()
-    # ประมวลผล AI ทุกๆ 0.1 วินาทีเท่านั้น (ประมาณ 10 fps) เพื่อไม่ให้มือถือค้าง
+    
+    # 2. ตรวจสอบเวลาเพื่อไม่ให้ CPU ทำงานหนักเกินไป
     if current_time - last_process_time > 0.1:
         last_process_time = current_time
         h, w, _ = img.shape
+        
+        # 3. สร้างตัวแปร img_rgb ก่อน (ต้องทำจุดนี้เท่านั้น!)
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        
+        # 4. ส่งไปให้ AI ประมวลผล
         results = hands.process(img_rgb)
 
         if results.multi_hand_landmarks:
-            # วาดเส้นจุดบนมือ (ลดความซับซ้อนลง)
             for hl in results.multi_hand_landmarks:
                 mp_draw.draw_landmarks(img, hl, mp_hands_module.HAND_CONNECTIONS)
             
+            # --- ส่วนประมวลผลโมเดลของคุณ ---
             data_aux = []
-            sorted_hands = sorted(zip(results.multi_hand_landmarks, results.multi_handedness),
-                                  key=lambda x: x[0].landmark[0].x)
-            
-            if len(sorted_hands) == 1:
-                hl, hn = sorted_hands[0]
-                pts = [[int(l.x * w), int(l.y * h)] for l in hl.landmark]
-                processed = pre_process_landmark(pts)
-                if hn.classification[0].label == 'Right':
-                    processed = flip_keypoint_x(processed)
-                data_aux.extend(processed)
-                data_aux.extend([0.0] * 42)
-            elif len(sorted_hands) >= 2:
-                for i in range(2):
-                    hl = sorted_hands[i][0]
-                    pts = [[int(l.x * w), int(l.y * h)] for l in hl.landmark]
-                    data_aux.extend(pre_process_landmark(pts))
-            
-            if len(data_aux) == 84:
-                prediction = model.predict(np.array([data_aux]))[0]
-                conf = model.predict_proba(np.array([data_aux])).max()
-                if conf > 0.5: # ลดความเข้มงวดของค่าความมั่นใจเพื่อให้ตอบสนองไวขึ้น
-                    res_thai = labels[int(prediction)]
-                    result_queue.put(res_thai)
+            # ... (โค้ดดึง Landmark และ Predict เหมือนเดิมของคุณ) ...
+            # ---------------------------
 
+    # 5. ส่งภาพที่วาดเส้นแล้วกลับไปโชว์หน้าเว็บ
     return frame.from_ndarray(img, format="bgr24")
 
 # --- 5. หน้าตาเว็บ ---
@@ -155,5 +141,6 @@ while True:
         )
     except queue.Empty:
         pass
+
 
 
