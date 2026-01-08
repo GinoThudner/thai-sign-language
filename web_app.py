@@ -19,8 +19,9 @@ import queue
 import time
 from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
-# --- 2. ข้อความอธิบาย ---
+# --- 2. ส่วนหัวข้อเว็บ ---
 st.title("🖐️ ระบบแปลภาษามือไทยแบบ Real-time")
+st.markdown("เครื่องมือช่วยแปลภาษามือไทยเป็นตัวอักษรด้วย AI (รองรับคอมพิวเตอร์และมือถือ)")
 st.markdown("---")
 
 # --- 3. โหลดทรัพยากร ---
@@ -43,7 +44,6 @@ def load_resources():
         labels_list = ["Error: No Label File"]
     
     mp_hands = mp.solutions.hands
-    # ปรับ min_detection_confidence ให้ทำงานเร็วขึ้น
     hands_engine = mp_hands.Hands(
         max_num_hands=2, 
         min_detection_confidence=0.5, 
@@ -53,7 +53,7 @@ def load_resources():
 
 model, labels, hands, mp_draw, mp_hands_module = load_resources()
 
-# --- 4. ฟังก์ชันประมวลผล (ปรับให้เบาที่สุด) ---
+# --- 4. ฟังก์ชันประมวลผล ---
 def pre_process_landmark(landmark_list):
     temp_landmark_list = copy.deepcopy(landmark_list)
     base_x, base_y = temp_landmark_list[0][0], temp_landmark_list[0][1]
@@ -69,46 +69,61 @@ def flip_keypoint_x(keypoint_list):
     for i in range(0, 42, 2): flipped[i] *= -1
     return flipped
 
-# สร้างตัวแปรไว้เก็บเวลาเพื่อทำ Frame Skipping (ลดภาระ CPU)
+# ตัวแปรควบคุมเฟรมเรต
 last_process_time = 0
 
 def video_frame_callback(frame):
     global last_process_time
-    # 1. รับค่าภาพเข้ามา
     img = frame.to_ndarray(format="bgr24")
-    img = cv2.flip(img, 1) # กลับด้านภาพให้เหมือนกระจก
+    img = cv2.flip(img, 1) # กลับด้านภาพ
     
     current_time = time.time()
-    
-    # 2. ตรวจสอบเวลาเพื่อไม่ให้ CPU ทำงานหนักเกินไป
+    # ประมวลผล AI ทุกๆ 0.1 วินาที (ป้องกันมือถือค้าง)
     if current_time - last_process_time > 0.1:
         last_process_time = current_time
         h, w, _ = img.shape
         
-        # 3. สร้างตัวแปร img_rgb ก่อน (ต้องทำจุดนี้เท่านั้น!)
+        # สร้าง img_rgb ก่อนประมวลผล
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        
-        # 4. ส่งไปให้ AI ประมวลผล
         results = hands.process(img_rgb)
 
         if results.multi_hand_landmarks:
             for hl in results.multi_hand_landmarks:
                 mp_draw.draw_landmarks(img, hl, mp_hands_module.HAND_CONNECTIONS)
             
-            # --- ส่วนประมวลผลโมเดลของคุณ ---
             data_aux = []
-            # ... (โค้ดดึง Landmark และ Predict เหมือนเดิมของคุณ) ...
-            # ---------------------------
+            sorted_hands = sorted(zip(results.multi_hand_landmarks, results.multi_handedness),
+                                  key=lambda x: x[0].landmark[0].x)
+            
+            if len(sorted_hands) == 1:
+                hl, hn = sorted_hands[0]
+                pts = [[int(l.x * w), int(l.y * h)] for l in hl.landmark]
+                processed = pre_process_landmark(pts)
+                if hn.classification[0].label == 'Right':
+                    processed = flip_keypoint_x(processed)
+                data_aux.extend(processed)
+                data_aux.extend([0.0] * 42)
+            elif len(sorted_hands) >= 2:
+                for i in range(2):
+                    hl = sorted_hands[i][0]
+                    pts = [[int(l.x * w), int(l.y * h)] for l in hl.landmark]
+                    data_aux.extend(pre_process_landmark(pts))
+            
+            if len(data_aux) == 84:
+                prediction = model.predict(np.array([data_aux]))[0]
+                conf = model.predict_proba(np.array([data_aux])).max()
+                if conf > 0.5:
+                    res_thai = labels[int(prediction)]
+                    result_queue.put(res_thai)
 
-    # 5. ส่งภาพที่วาดเส้นแล้วกลับไปโชว์หน้าเว็บ
     return frame.from_ndarray(img, format="bgr24")
 
-# --- 5. หน้าตาเว็บ ---
+# --- 5. การแสดงผลหน้าเว็บ ---
 output_container = st.empty()
-output_container.success("💡 ท่าทางที่พบ: กำลังรอการตรวจจับ...")
+output_container.success("💡 พร้อมใช้งาน: กรุณากด Start และอนุญาตให้เข้าถึงกล้อง")
 
 webrtc_streamer(
-    key="thai-sign-v3", # เปลี่ยน Key ทุกครั้งที่แก้ปัญหาหน้าจอค้าง
+    key="sign-lang-universal-v1", # เปลี่ยน Key เพื่อรีเซ็ตการเชื่อมต่อ
     mode=WebRtcMode.SENDRECV,
     rtc_configuration={
         "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}],
@@ -117,30 +132,27 @@ webrtc_streamer(
     video_frame_callback=video_frame_callback,
     media_stream_constraints={
         "video": {
-            "width": {"ideal": 320}, # ลดขนาดลงอีกเพื่อให้ลื่นที่สุด
-            "height": {"ideal": 240},
-            "frameRate": {"ideal": 15}
+            "width": {"ideal": 480}, # ความละเอียดที่เหมาะสมกับมือถือและคอม
+            "height": {"ideal": 360},
+            "frameRate": {"ideal": 20}
         },
         "audio": False
     },
     async_processing=True,
 )
 
-# ลูปดึงผลลัพธ์มาโชว์
+# ส่วนการดึงคำแปลมาโชว์ตัวโตๆ
 while True:
     try:
         msg = result_queue.get(timeout=1.0)
         output_container.markdown(
             f"""
-            <div style="background-color: #d4edda; color: #155724; padding: 15px; border-radius: 10px; text-align: center;">
-                <p style="margin: 0; font-size: 18px;">✅ ท่าทางที่พบ:</p>
-                <h1 style="margin: 0; font-size: 60px; font-weight: bold;">{msg}</h1>
+            <div style="background-color: #d4edda; color: #155724; padding: 20px; border-radius: 10px; text-align: center; border: 2px solid #c3e6cb;">
+                <p style="margin: 0; font-size: 20px;">✅ ท่าทางที่พบ:</p>
+                <h1 style="margin: 0; font-size: 80px; font-weight: bold;">{msg}</h1>
             </div>
             """,
             unsafe_allow_html=True
         )
     except queue.Empty:
         pass
-
-
-
