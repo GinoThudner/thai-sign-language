@@ -29,10 +29,10 @@ def load_resources():
     
     mp_hands = mp.solutions.hands
     hands_engine = mp_hands.Hands(
-        max_num_hands=1, # ตรวจจับแค่มือเดียวเพื่อลดภาระ CPU
-        min_detection_confidence=0.5, 
-        min_tracking_confidence=0.5
-    )
+        max_num_hands=1, # ตรวจจับแค่มือเดียวจะลื่นกว่ามาก
+        min_detection_confidence=0.3, # ลดจาก 0.5 เหลือ 0.3
+        min_tracking_confidence=0.3
+)
     return model_obj, labels_list, hands_engine, mp.solutions.drawing_utils, mp_hands
 
 model, labels, hands, mp_draw, mp_hands_module = load_resources()
@@ -89,8 +89,13 @@ webrtc_streamer(
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
     video_frame_callback=video_frame_callback,
     media_stream_constraints={
-        "video": {"width": 480, "height": 360, "frameRate": 10}, # ลดความละเอียดลงเพื่อให้ลื่น
-        "audio": False
+    "video": {
+        "width": {"ideal": 320}, # ปรับลดจาก 640 เหลือ 320
+        "height": {"ideal": 240}, 
+        "frameRate": {"ideal": 10} # ปรับเฟรมเรตให้ต่ำลงเพื่อลดภาระ CPU
     },
+    "audio": False
+}
     async_processing=True,
 )
+
