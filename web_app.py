@@ -19,7 +19,7 @@ import queue
 from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
 # --- 2. ข้อความอธิบายสำหรับ Google (SEO Section) ---
-st.title("🖐️ ระบบแปลภาษามือไทยแบบ Real-time โดย นายอชิรวิทย์ กิติสุข")
+st.title("🖐️ ระบบแปลภาษามือไทยแบบ Real-time")
 st.markdown("""
 ### เครื่องมือช่วยแปลภาษามือไทยเป็นตัวอักษรด้วย AI
 แอปพลิเคชันนี้ใช้เทคโนโลยี **Machine Learning** และ **Mediapipe** เพื่อตรวจจับท่าทางมือและแปลเป็นภาษาไทยได้ทันทีผ่านกล้องเว็บแคม 
