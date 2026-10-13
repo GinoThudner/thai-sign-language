@@ -5,5 +5,3 @@ opencv-contrib-python-headless==4.9.0.80
 scikit-learn
 numpy
 pandas
-TWILIO_ACCOUNT_SID = AC7f6305edf91ba3bee4bd1fce9f487b85
-TWILIO_AUTH_TOKEN = 8a738e7245cbbc7c5fb100f557df0175
