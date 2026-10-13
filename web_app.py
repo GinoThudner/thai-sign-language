@@ -1,12 +1,4 @@
 import streamlit as st
-
-# --- 1. ตั้งค่าหน้าเว็บเพื่อ SEO (สำคัญ: ต้องเป็นบรรทัดแรก) ---
-st.set_page_config(
-    page_title="แปลภาษามือไทยออนไลน์ - AI Sign Language Translator",
-    page_icon="🖐️",
-    layout="centered"
-)
-
 import cv2
 import mediapipe as mp
 import pickle
@@ -15,46 +7,51 @@ import os
 import pandas as pd
 import copy
 import itertools
-import queue
-from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
-# --- 2. ข้อความอธิบายสำหรับ Google (SEO Section) ---
-st.title("🖐️ ระบบแปลภาษามือไทยแบบ Real-time โดย นายอชิรวิทย์ กิติสุข")
-st.title("🖐️ ระบบแปลภาษามือไทยแบบ Real-time")
+# --- 1. ตั้งค่าหน้าเว็บเพื่อ SEO ---
+st.set_page_config(
+    page_title="แปลภาษามือไทยออนไลน์ - AI Sign Language Translator",
+    page_icon="🖐️",
+    layout="centered"
+)
+
+# --- 2. ส่วนหัวข้อเว็บไซต์ ---
+st.title("🖐️ ระบบแปลภาษามือไทยด้วย AI (โหมดถ่ายภาพเสถียรพิเศษ)")
 st.markdown("""
 ### เครื่องมือช่วยแปลภาษามือไทยเป็นตัวอักษรด้วย AI
-แอปพลิเคชันนี้ใช้เทคโนโลยี **Machine Learning** และ **Mediapipe** เพื่อตรวจจับท่าทางมือและแปลเป็นภาษาไทยได้ทันทีผ่านกล้องเว็บแคม 
-เหมาะสำหรับการเรียนรู้ภาษามือเบื้องต้นและช่วยในการสื่อสาร
+แอปพลิเคชันนี้ออกแบบมาให้ใช้งานบนคลาวด์ได้อย่างเสถียร 
+เพียงกดถ่ายภาพท่าทางมือ ระบบจะทำการประมวลผลโครงสร้างแลนด์มาร์กและแปลผลทันที
 """)
 st.markdown("---")
 
-# --- 3. โหลดทรัพยากร ---
+# --- 3. โหลดทรัพยากร (โมเดลและป้ายกำกับ) ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 model_path = os.path.join(BASE_DIR, 'keypoint_classifier_model.pkl')
 label_path = os.path.join(BASE_DIR, 'keypoint_classifier_label.csv')
-
-# Queue สำหรับส่งข้อความจากกล้องมาที่ UI
-result_queue = queue.Queue()
 
 @st.cache_resource
 def load_resources():
     with open(model_path, 'rb') as f:
         m = pickle.load(f)
         model_obj = m['model'] if isinstance(m, dict) else m
-
+    
     if os.path.exists(label_path):
         df = pd.read_csv(label_path, header=None, encoding='utf-8')
         labels_list = df.iloc[:, 1].astype(str).tolist() if df.shape[1] > 1 else df.iloc[:, 0].astype(str).tolist()
     else:
         labels_list = ["Error: No Label File"]
-
+    
     mp_hands = mp.solutions.hands
-    hands_engine = mp_hands.Hands(max_num_hands=2, min_detection_confidence=0.7)
+    hands_engine = mp_hands.Hands(
+        max_num_hands=2, 
+        min_detection_confidence=0.7,
+        min_tracking_confidence=0.5
+    )
     return model_obj, labels_list, hands_engine, mp.solutions.drawing_utils, mp_hands
 
 model, labels, hands, mp_draw, mp_hands_module = load_resources()
 
-# --- 4. ฟังก์ชันประมวลผล ---
+# --- 4. ฟังก์ชันประมวลผลโครงสร้างมือ ---
 def pre_process_landmark(landmark_list):
     temp_landmark_list = copy.deepcopy(landmark_list)
     base_x, base_y = temp_landmark_list[0][0], temp_landmark_list[0][1]
@@ -67,24 +64,35 @@ def pre_process_landmark(landmark_list):
 
 def flip_keypoint_x(keypoint_list):
     flipped = list(keypoint_list)
-    for i in range(0, 42, 2): flipped[i] *= -1
+    for i in range(0, 42, 2): 
+        flipped[i] *= -1
     return flipped
 
-def video_frame_callback(frame):
-    img = frame.to_ndarray(format="bgr24")
+# --- 5. ช่องทางรับภาพจากกล้องเว็บแคมผ่าน st.camera_input ---
+st.info("💡 วิธีใช้งาน: จัดท่าทางมือให้ตรงกับกล้อง แล้วกดปุ่ม **'Take Photo'** เพื่อแปลผล")
+image_file = st.camera_input("📸 ถ่ายภาพท่าทางภาษามือ")
+
+if image_file is not None:
+    # แปลงไฟล์ภาพที่ได้เป็นรูปแบบ OpenCV
+    file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
+    img = cv2.imdecode(file_bytes, 1)
     img = cv2.flip(img, 1)
     h, w, _ = img.shape
+    
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     results = hands.process(img_rgb)
 
     if results.multi_hand_landmarks:
+        # วาดเส้นโครงสร้างมือลงบนรูปภาพ
         for hl in results.multi_hand_landmarks:
             mp_draw.draw_landmarks(img, hl, mp_hands_module.HAND_CONNECTIONS)
-
+        
         data_aux = []
-        sorted_hands = sorted(zip(results.multi_hand_landmarks, results.multi_handedness),
-                              key=lambda x: x[0].landmark[0].x)
-
+        sorted_hands = sorted(
+            zip(results.multi_hand_landmarks, results.multi_handedness),
+            key=lambda x: x[0].landmark[0].x
+        )
+        
         if len(sorted_hands) == 1:
             hl, hn = sorted_hands[0]
             pts = [[int(l.x * w), int(l.y * h)] for l in hl.landmark]
@@ -98,42 +106,33 @@ def video_frame_callback(frame):
                 hl = sorted_hands[i][0]
                 pts = [[int(l.x * w), int(l.y * h)] for l in hl.landmark]
                 data_aux.extend(pre_process_landmark(pts))
-
+        
         if len(data_aux) == 84:
-            prediction = model.predict(np.array([data_aux]))[0]
-            conf = model.predict_proba(np.array([data_aux])).max()
-
+            input_data = np.array([data_aux])
+            prediction = model.predict(input_data)[0]
+            
+            if hasattr(model, "predict_proba"):
+                conf = model.predict_proba(input_data).max()
+            else:
+                conf = 1.0
+            
             if conf > 0.7:
                 res_thai = labels[int(prediction)]
-                result_queue.put(res_thai)
-
-    return frame.from_ndarray(img, format="bgr24")
-
-# --- 5. หน้าตาเว็บ ---
-output_container = st.empty()
-output_container.success("💡 ท่าทางที่พบ: กำลังรอการตรวจจับ...")
-
-webrtc_streamer(
-    key="thai-sign-online",
-    mode=WebRtcMode.SENDRECV,
-    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-    video_frame_callback=video_frame_callback,
-    media_stream_constraints={"video": True, "audio": False},
-    async_processing=True,
-)
-
-# --- ส่วนดึงข้อมูลมาแสดงผลตัวโตๆ ---
-while True:
-    try:
-        msg = result_queue.get(timeout=1.0)
-        output_container.markdown(
-            f"""
-            <div style="background-color: #d4edda; color: #155724; padding: 20px; border-radius: 10px; border: 1px solid #c3e6cb; text-align: center;">
-                <p style="margin: 0; font-size: 24px;">✅ ท่าทางที่พบ:</p>
-                <h1 style="margin: 0; font-size: 100px; font-weight: bold;">{msg}</h1>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-    except queue.Empty:
-        pass
+                st.success("✅ แปลผลสำเร็จ:")
+                st.markdown(
+                    f"""
+                    <div style="background-color: #d4edda; color: #155724; padding: 20px; border-radius: 10px; border: 1px solid #c3e6cb; text-align: center;">
+                        <h1 style="margin: 0; font-size: 80px; font-weight: bold;">{res_thai}</h1>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+            else:
+                st.warning("⚠️ ความมั่นใจต่ำกว่า 70% กรุณาลองจัดท่าทางให้ชัดเจนแล้วถ่ายใหม่อีกครั้ง")
+        else:
+            st.warning("⚠️ ข้อมูลแลนด์มาร์กมือไม่ครบถ้วน")
+    else:
+        st.warning("⚠️ ไม่พบมือในภาพ กรุณาวางตำแหน่งมือให้อยู่หน้ากล้องแล้วถ่ายใหม่")
+    
+    # แสดงรูปภาพที่ตรวจจับโครงสร้างมือแล้ว
+    st.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), caption="ภาพตัวอย่างพร้อมโครงสร้างแลนด์มาร์ก", use_container_width=True)
