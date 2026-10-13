@@ -111,11 +111,20 @@ def video_frame_callback(frame):
 # --- 5. หน้าตาเว็บ ---
 output_container = st.empty()
 output_container.success("💡 ท่าทางที่พบ: กำลังรอการตรวจจับ...")
+from twilio.rest import Client
 
+def get_ice_servers():
+    try:
+        sid = st.secrets["TWILIO_ACCOUNT_SID"]
+        token = st.secrets["TWILIO_AUTH_TOKEN"]
+    except KeyError:
+        return [{"urls": ["stun:stun.l.google.com:19302"]}]
+    return Client(sid, token).tokens.create().ice_servers
+    
 webrtc_streamer(
     key="thai-sign-online",
     mode=WebRtcMode.SENDRECV,
-    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+    rtc_configuration={"iceServers": get_ice_servers()},
     video_frame_callback=video_frame_callback,
     media_stream_constraints={"video": True, "audio": False},
     async_processing=True,
