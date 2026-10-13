@@ -121,13 +121,17 @@ def get_ice_servers():
         return [{"urls": ["stun:stun.l.google.com:19302"]}]
     return Client(sid, token).tokens.create().ice_servers
     
-webrtc_streamer(
+ctx = webrtc_streamer(
     key="thai-sign-online",
-    mode=WebRtcMode.SENDRECV,
-    rtc_configuration={"iceServers": get_ice_servers()},
-    video_frame_callback=video_frame_callback,
-    media_stream_constraints={"video": True, "audio": False},
-    async_processing=True,
+    ...  # พารามิเตอร์เดิม
+)
+
+while ctx.state.playing:
+    try:
+        msg = result_queue.get(timeout=1.0)
+        # ... โค้ดแสดงผลเดิม
+    except queue.Empty:
+        pass
 )
 
 # --- ส่วนดึงข้อมูลมาแสดงผลตัวโตๆ ---
