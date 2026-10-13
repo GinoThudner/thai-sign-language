@@ -1,4 +1,12 @@
-import gradio as gr
+import streamlit as st
+
+# --- 1. ตั้งค่าหน้าเว็บเพื่อ SEO (สำคัญ: ต้องเป็นบรรทัดแรก) ---
+st.set_page_config(
+    page_title="แปลภาษามือไทยออนไลน์ - AI Sign Language Translator",
+    page_icon="🖐️",
+    layout="centered"
+)
+
 import cv2
 import mediapipe as mp
 import pickle
@@ -7,31 +15,46 @@ import os
 import pandas as pd
 import copy
 import itertools
+import queue
+from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
-# --- 1. โหลดทรัพยากร ---
+# --- 2. ข้อความอธิบายสำหรับ Google (SEO Section) ---
+st.title("🖐️ ระบบแปลภาษามือไทยแบบ Real-time โดย นายอชิรวิทย์ กิติสุข")
+st.title("🖐️ ระบบแปลภาษามือไทยแบบ Real-time")
+st.markdown("""
+### เครื่องมือช่วยแปลภาษามือไทยเป็นตัวอักษรด้วย AI
+แอปพลิเคชันนี้ใช้เทคโนโลยี **Machine Learning** และ **Mediapipe** เพื่อตรวจจับท่าทางมือและแปลเป็นภาษาไทยได้ทันทีผ่านกล้องเว็บแคม 
+เหมาะสำหรับการเรียนรู้ภาษามือเบื้องต้นและช่วยในการสื่อสาร
+""")
+st.markdown("---")
+
+# --- 3. โหลดทรัพยากร ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 model_path = os.path.join(BASE_DIR, 'keypoint_classifier_model.pkl')
 label_path = os.path.join(BASE_DIR, 'keypoint_classifier_label.csv')
 
-with open(model_path, 'rb') as f:
-    m = pickle.load(f)
-    model = m['model'] if isinstance(m, dict) else m
+# Queue สำหรับส่งข้อความจากกล้องมาที่ UI
+result_queue = queue.Queue()
 
-if os.path.exists(label_path):
-    df = pd.read_csv(label_path, header=None, encoding='utf-8')
-    labels = df.iloc[:, 1].astype(str).tolist() if df.shape[1] > 1 else df.iloc[:, 0].astype(str).tolist()
-else:
-    labels = ["Error: No Label File"]
+@st.cache_resource
+def load_resources():
+    with open(model_path, 'rb') as f:
+        m = pickle.load(f)
+        model_obj = m['model'] if isinstance(m, dict) else m
 
-mp_hands = mp.solutions.hands
-hands = mp_hands.Hands(
-    max_num_hands=2, 
-    min_detection_confidence=0.7,
-    min_tracking_confidence=0.5
-)
-mp_draw = mp.solutions.drawing_utils
+    if os.path.exists(label_path):
+        df = pd.read_csv(label_path, header=None, encoding='utf-8')
+        labels_list = df.iloc[:, 1].astype(str).tolist() if df.shape[1] > 1 else df.iloc[:, 0].astype(str).tolist()
+    else:
+        labels_list = ["Error: No Label File"]
 
-# --- 2. ฟังก์ชันประมวลผล ---
+    mp_hands = mp.solutions.hands
+    hands_engine = mp_hands.Hands(max_num_hands=2, min_detection_confidence=0.7)
+    return model_obj, labels_list, hands_engine, mp.solutions.drawing_utils, mp_hands
+
+model, labels, hands, mp_draw, mp_hands_module = load_resources()
+
+# --- 4. ฟังก์ชันประมวลผล ---
 def pre_process_landmark(landmark_list):
     temp_landmark_list = copy.deepcopy(landmark_list)
     base_x, base_y = temp_landmark_list[0][0], temp_landmark_list[0][1]
@@ -44,42 +67,23 @@ def pre_process_landmark(landmark_list):
 
 def flip_keypoint_x(keypoint_list):
     flipped = list(keypoint_list)
-    for i in range(0, 42, 2): 
-        flipped[i] *= -1
+    for i in range(0, 42, 2): flipped[i] *= -1
     return flipped
 
-# --- 3. ฟังก์ชันประมวลผลเฟรมวิดีโอ (รับภาพจาก Gradio Webcam และส่งค่ากลับ) ---
 def video_frame_callback(frame):
-    if frame is None:
-        return frame, """
-        <div style="background-color: #f8d7da; color: #721c24; padding: 20px; border-radius: 10px; border: 1px solid #f5c6cb; text-align: center;">
-            <p style="margin: 0; font-size: 24px;">💡 ท่าทางที่พบ:</p>
-            <h1 style="margin: 0; font-size: 80px; font-weight: bold;">กำลังรอการเปิดกล้อง...</h1>
-        </div>
-        """
-    
-    # Gradio ส่งภาพมาเป็น RGB ต้องแปลงเป็น BGR เพื่อใช้กับ OpenCV
-    img = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+    img = frame.to_ndarray(format="bgr24")
     img = cv2.flip(img, 1)
     h, w, _ = img.shape
-    
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     results = hands.process(img_rgb)
 
-    res_thai = "กำลังรอการตรวจจับ..."
-    bg_color = "#d4edda"
-    text_color = "#155724"
-    border_color = "#c3e6cb"
-
     if results.multi_hand_landmarks:
         for hl in results.multi_hand_landmarks:
-            mp_draw.draw_landmarks(img, hl, mp_hands.HAND_CONNECTIONS)
+            mp_draw.draw_landmarks(img, hl, mp_hands_module.HAND_CONNECTIONS)
 
         data_aux = []
-        sorted_hands = sorted(
-            zip(results.multi_hand_landmarks, results.multi_handedness),
-            key=lambda x: x[0].landmark[0].x
-        )
+        sorted_hands = sorted(zip(results.multi_hand_landmarks, results.multi_handedness),
+                              key=lambda x: x[0].landmark[0].x)
 
         if len(sorted_hands) == 1:
             hl, hn = sorted_hands[0]
@@ -96,58 +100,40 @@ def video_frame_callback(frame):
                 data_aux.extend(pre_process_landmark(pts))
 
         if len(data_aux) == 84:
-            input_array = np.array([data_aux])
-            prediction = model.predict(input_array)[0]
-            
-            if hasattr(model, "predict_proba"):
-                conf = model.predict_proba(input_array).max()
-            else:
-                conf = 1.0
+            prediction = model.predict(np.array([data_aux]))[0]
+            conf = model.predict_proba(np.array([data_aux])).max()
 
             if conf > 0.7:
                 res_thai = labels[int(prediction)]
+                result_queue.put(res_thai)
 
-    # สร้าง HTML แสดงผลตัวหนังสือตัวโตๆ แบบที่คุณต้องการ
-    html_output = f"""
-    <div style="background-color: {bg_color}; color: {text_color}; padding: 20px; border-radius: 10px; border: 1px solid {border_color}; text-align: center;">
-        <p style="margin: 0; font-size: 24px;">✅ ท่าทางที่พบ:</p>
-        <h1 style="margin: 0; font-size: 80px; font-weight: bold;">{res_thai}</h1>
-    </div>
-    """
+    return frame.from_ndarray(img, format="bgr24")
 
-    # แปลงภาพกลับเป็น RGB สำหรับแสดงผลใน Gradio
-    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB), html_output
+# --- 5. หน้าตาเว็บ ---
+output_container = st.empty()
+output_container.success("💡 ท่าทางที่พบ: กำลังรอการตรวจจับ...")
 
-# --- 4. หน้าตาเว็บด้วย Gradio Blocks ---
-with gr.Blocks(theme=gr.themes.Soft()) as demo:
-    gr.Markdown("# 🖐️ ระบบแปลภาษามือไทยแบบ Real-time โดย นายอชิรวิทย์ กิติสุข")
-    gr.Markdown("""
-    ### เครื่องมือช่วยแปลภาษามือไทยเป็นตัวอักษรด้วย AI
-    แอปพลิเคชันนี้ใช้เทคโนโลยี **Machine Learning** และ **Mediapipe** เพื่อตรวจจับท่าทางมือและแปลเป็นภาษาไทยได้ทันทีผ่านกล้องเว็บแคม  
-    เหมาะสำหรับการเรียนรู้ภาษามือเบื้องต้นและช่วยในการสื่อสาร
-    """)
-    gr.markdown("---")
+webrtc_streamer(
+    key="thai-sign-online",
+    mode=WebRtcMode.SENDRECV,
+    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+    video_frame_callback=video_frame_callback,
+    media_stream_constraints={"video": True, "audio": False},
+    async_processing=True,
+)
 
-    with gr.Row():
-        with gr.Column(scale=2):
-            # ใช้ gr.Image เปิด streaming mode สำหรับดึงภาพจากกล้องแบบเรียลไทม์
-            webcam_input = gr.Image(sources=["webcam"], streaming=True, label="กล้องเว็บแคม")
-        with gr.Column(scale=1):
-            output_html = gr.HTML("""
+# --- ส่วนดึงข้อมูลมาแสดงผลตัวโตๆ ---
+while True:
+    try:
+        msg = result_queue.get(timeout=1.0)
+        output_container.markdown(
+            f"""
             <div style="background-color: #d4edda; color: #155724; padding: 20px; border-radius: 10px; border: 1px solid #c3e6cb; text-align: center;">
-                <p style="margin: 0; font-size: 24px;">💡 ท่าทางที่พบ:</p>
-                <h1 style="margin: 0; font-size: 80px; font-weight: bold;">กำลังรอการตรวจจับ...</h1>
+                <p style="margin: 0; font-size: 24px;">✅ ท่าทางที่พบ:</p>
+                <h1 style="margin: 0; font-size: 100px; font-weight: bold;">{msg}</h1>
             </div>
-            """)
-
-    # ผูกฟังก์ชันเข้ากับสตรีมของกล้อง
-    webcam_input.stream(
-        fn=video_frame_callback,
-        inputs=webcam_input,
-        outputs=[webcam_input, output_html],
-        time_limit=None,
-        concurrency_limit=20
-    )
-
-if __name__ == "__main__":
-    demo.launch()
+            """,
+            unsafe_allow_html=True
+        )
+    except queue.Empty:
+        pass
