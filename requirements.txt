@@ -5,3 +5,4 @@ opencv-contrib-python-headless==4.9.0.80
 scikit-learn
 numpy
 pandas
+twilio
