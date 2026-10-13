@@ -108,34 +108,37 @@ def video_frame_callback(frame):
 
     return frame.from_ndarray(img, format="bgr24")
 
-# --- 5. หน้าตาเว็บ ---
-output_container = st.empty()
-output_container.success("💡 ท่าทางที่พบ: กำลังรอการตรวจจับ...")
-from twilio.rest import Client
-
+# --- 5. เซิร์ฟเวอร์ช่วยเชื่อมต่อ WebRTC (STUN + TURN) ---
 def get_ice_servers():
+    """
+    ใช้ TURN ของ Twilio ถ้าตั้ง secrets ไว้ใน Streamlit Cloud
+    ถ้าไม่มี secrets / ไม่ได้ติดตั้ง twilio / เรียก Twilio ไม่ได้ ให้ถอยกลับไปใช้ STUN ของ Google
+    (ใช้ except กว้างๆ เพราะถ้าไม่มีไฟล์ secrets เลย Streamlit จะ error คนละชนิดกับ KeyError)
+    """
+    fallback = [{"urls": ["stun:stun.l.google.com:19302"]}]
     try:
+        from twilio.rest import Client
         sid = st.secrets["TWILIO_ACCOUNT_SID"]
         token = st.secrets["TWILIO_AUTH_TOKEN"]
-    except KeyError:
-        return [{"urls": ["stun:stun.l.google.com:19302"]}]
-    return Client(sid, token).tokens.create().ice_servers
-    
+        return Client(sid, token).tokens.create().ice_servers
+    except Exception:
+        return fallback
+
+# --- 6. หน้าตาเว็บ ---
+output_container = st.empty()
+output_container.success("💡 ท่าทางที่พบ: กำลังรอการตรวจจับ...")
+
 ctx = webrtc_streamer(
     key="thai-sign-online",
-    ...  # พารามิเตอร์เดิม
+    mode=WebRtcMode.SENDRECV,
+    rtc_configuration={"iceServers": get_ice_servers()},
+    video_frame_callback=video_frame_callback,
+    media_stream_constraints={"video": True, "audio": False},
+    async_processing=True,
 )
 
+# --- ส่วนดึงข้อมูลมาแสดงผลตัวโตๆ (วนเฉพาะตอนกล้องเปิดอยู่ ไม่ให้สคริปต์ค้างตลอดกาล) ---
 while ctx.state.playing:
-    try:
-        msg = result_queue.get(timeout=1.0)
-        # ... โค้ดแสดงผลเดิม
-    except queue.Empty:
-        pass
-)
-
-# --- ส่วนดึงข้อมูลมาแสดงผลตัวโตๆ ---
-while True:
     try:
         msg = result_queue.get(timeout=1.0)
         output_container.markdown(
