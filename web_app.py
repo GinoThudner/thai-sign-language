@@ -154,7 +154,7 @@ ctx = webrtc_streamer(
     rtc_configuration=RTCConfiguration({"iceServers": get_ice_servers()}),
     video_frame_callback=video_frame_callback,
     media_stream_constraints={"video": True, "audio": False},
-    async_processing=True,
+    async_processing=False,
 )
 
 # --- ส่วนดึงข้อมูลมาแสดงผลตัวโตๆ (ปรับปรุงให้ไม่บล็อก UI นานเกินไป) ---
